@@ -2192,6 +2192,10 @@ export class StandingOrderManager {
       return
     }
     if (oid) this.bookedFillOrderIds.add(oid)
+    // Persist the observed fill latency (publish→fill) for regression tracking.
+    try { recordLatencyFillObserved(oid, filledPrice, Date.now()) } catch { /* best-effort */ }
+
+
 
 
     const cost = Math.round(order.shares * filledPrice * 10000) / 10000
