@@ -376,18 +376,17 @@ export function settleTrade(t: {
   const d = getDb()
   let explanation: string | null = null
   if (t.explanation) {
-    const prev = (d.prepare(`SELECT explanation FROM trades WHERE id = ?`).get(t.id) as { explanation: string | null } | undefined)
+    const prev = (prep(d, `SELECT explanation FROM trades WHERE id = ?`).get(t.id) as { explanation: string | null } | undefined)
       ?.explanation ?? null
     explanation = mergeExplanations(prev, t.explanation)
   }
-  const info = d
-    .prepare(
-      `UPDATE trades
+  const info = prep(
+    d,
+    `UPDATE trades
          SET status = 'SETTLED', result = ?, pnl = ?, balance_after = ?, mark_price = ?, unrealized_pnl = NULL,
              settled_at = datetime('now'), explanation = COALESCE(?, explanation)
        WHERE id = ? AND status = 'OPEN'`,
-    )
-    .run(t.result, t.pnl, t.balanceAfter, t.markPrice, explanation, t.id)
+  ).run(t.result, t.pnl, t.balanceAfter, t.markPrice, explanation, t.id)
   return Number(info.changes ?? 0)
 }
 
@@ -398,7 +397,7 @@ export function settleTrade(t: {
  * balance is only known immediately after. Display-only field.
  */
 export function updateSettledBalance(id: number, balanceAfter: number) {
-  getDb().prepare(`UPDATE trades SET balance_after = ? WHERE id = ? AND status = 'SETTLED'`).run(balanceAfter, id)
+  prep(getDb(), `UPDATE trades SET balance_after = ? WHERE id = ? AND status = 'SETTLED'`).run(balanceAfter, id)
 }
 
 /**
