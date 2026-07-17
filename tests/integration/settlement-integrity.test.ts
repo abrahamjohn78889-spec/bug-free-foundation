@@ -463,4 +463,108 @@ describe("settlement-repair engine (Phase 4)", () => {
     expect(b.balance_after).toBe(150)
     expect(b.result).toBe("LOSS")
   })
+
+  // ---------------------------------------------------------------------------
+  // Bug #004b — Post-repair PnL / explanation mismatch on the compounding ledger
+  //
+  // Before the fix, `repairTrade` rewrote result/pnl/mark_price but left the
+  // ledger's human-readable settlement/pnlCalc/resolvedWinner/resolutionSource
+  // fields frozen at the initial booking. The ledger UI then showed
+  // contradictions like "LOSS -$9.00" next to "SCRATCH — cost refunded;
+  // realized PnL $0.0000", making correctly-repaired WINs read like losses.
+  // ---------------------------------------------------------------------------
+  it("Bug #004b: repair overwrites human-readable settlement/pnlCalc so the ledger tells a coherent story (SCRATCH → WIN)", () => {
+    const uid = `verify-repair-explanation-scratchwin-${Date.now()}`
+    const id = seedSettledTrade({
+      uid,
+      marketId: `mkt-${uid}`,
+      slotEndMs,
+      side: "UP",
+      result: "SCRATCH",
+      explanation: {
+        settlement: "SCRATCH — no reliable market resolution (source: scratch); the entry cost was refunded so the slot nets exactly zero",
+        pnlCalc: "cost $11.0000 refunded; realized PnL $0.0000",
+        resolvedWinner: null,
+        resolutionSource: "scratch",
+      },
+    })
+
+    const out = repairTrade(repairable(id, uid, { result: "SCRATCH", pnl: 0 }), "UP", { requestedBy: "test-004b" })
+    expect(out.applied).toBe(true)
+
+    flushWriteQueueSync()
+    const db = new Database(DB_FILE, { readonly: true })
+    const row = db.prepare("SELECT result, pnl, explanation FROM trades WHERE id = ?").get(id) as {
+      result: string
+      pnl: number
+      explanation: string
+    }
+    db.close()
+
+    expect(row.result).toBe("WIN")
+    expect(row.pnl).toBeCloseTo(9, 3)
+
+    const parsed = JSON.parse(row.explanation) as {
+      settlement: string
+      pnlCalc: string
+      resolvedWinner: string | null
+      resolutionSource: string
+      settlementRepair: { old: { result: string; pnl: number } }
+    }
+    // Human-readable settlement fields now match the repaired outcome — no
+    // more SCRATCH/refund text on a WIN row.
+    expect(parsed.settlement).toMatch(/^WIN /)
+    expect(parsed.settlement).not.toMatch(/SCRATCH/)
+    expect(parsed.settlement).not.toMatch(/refunded/)
+    expect(parsed.pnlCalc).toMatch(/payout \$20\.0000/)
+    expect(parsed.pnlCalc).toMatch(/\+\$9\.0000/)
+    expect(parsed.pnlCalc).not.toMatch(/refunded/)
+    expect(parsed.resolvedWinner).toBe("UP")
+    expect(parsed.resolutionSource).toBe("settlement-repair")
+    // Original booking is preserved forever for the audit trail.
+    expect(parsed.settlementRepair.old.result).toBe("SCRATCH")
+    expect(parsed.settlementRepair.old.pnl).toBe(0)
+  })
+
+  it("Bug #004b: repair overwrites human-readable settlement/pnlCalc when downgrading SCRATCH → LOSS", () => {
+    const uid = `verify-repair-explanation-scratchloss-${Date.now()}`
+    const id = seedSettledTrade({
+      uid,
+      marketId: `mkt-${uid}`,
+      slotEndMs,
+      side: "UP",
+      result: "SCRATCH",
+      explanation: {
+        settlement: "SCRATCH — no reliable market resolution (source: scratch); the entry cost was refunded so the slot nets exactly zero",
+        pnlCalc: "cost $11.0000 refunded; realized PnL $0.0000",
+        resolvedWinner: null,
+        resolutionSource: "scratch",
+      },
+    })
+
+    const out = repairTrade(repairable(id, uid, { result: "SCRATCH", pnl: 0 }), "DOWN", { requestedBy: "test-004b" })
+    expect(out.applied).toBe(true)
+
+    flushWriteQueueSync()
+    const db = new Database(DB_FILE, { readonly: true })
+    const row = db.prepare("SELECT result, explanation FROM trades WHERE id = ?").get(id) as {
+      result: string
+      explanation: string
+    }
+    db.close()
+
+    expect(row.result).toBe("LOSS")
+    const parsed = JSON.parse(row.explanation) as {
+      settlement: string
+      pnlCalc: string
+      resolvedWinner: string
+      resolutionSource: string
+    }
+    expect(parsed.settlement).toMatch(/^LOSS /)
+    expect(parsed.settlement).not.toMatch(/SCRATCH/)
+    expect(parsed.pnlCalc).toMatch(/-\$11\.0000/)
+    expect(parsed.resolvedWinner).toBe("DOWN")
+    expect(parsed.resolutionSource).toBe("settlement-repair")
+  })
 })
+

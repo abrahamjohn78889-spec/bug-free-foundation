@@ -136,7 +136,24 @@ export function repairTrade(
 
   // ---- 2. Rewrite the trade row (merge repair evidence into explanation). ----
   const db = getDbHandle()
+  const won = expected.result === "WIN"
+  // Overwrite the human-readable settlement fields so the ledger UI shows a
+  // single coherent story after repair. Without this, `settlement`, `pnlCalc`,
+  // `resolvedWinner`, and `resolutionSource` stay frozen at the original
+  // (SCRATCH / spot-fallback / wrong-side) values while STATUS + PnL columns
+  // reflect the corrected outcome — trades that were auto-repaired from
+  // SCRATCH to WIN appear in the dashboard as "WIN +$0.10" next to a
+  // "SCRATCH — cost refunded; realized PnL $0.0000" explanation, which is
+  // exactly the accounting-mismatch users see on the compounding ledger.
+  const repairedSettlementText = won
+    ? `WIN — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); each share paid out $1.00 [auto-repaired from ${trade.result}]`
+    : `LOSS — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); shares expired worthless [auto-repaired from ${trade.result}]`
+  const repairedPnlCalcText = `payout $${expected.payout.toFixed(4)} − cost $${trade.cost.toFixed(4)} = ${expected.pnl >= 0 ? "+" : ""}$${expected.pnl.toFixed(4)} [auto-repaired]`
   const repairBlock = {
+    settlement: repairedSettlementText,
+    pnlCalc: repairedPnlCalcText,
+    resolvedWinner: officialWinner,
+    resolutionSource: "settlement-repair",
     settlementRepair: {
       repairedAtMs: Date.now(),
       requestedBy,
@@ -153,6 +170,8 @@ export function repairTrade(
         ?.explanation ?? null
     let merged: string
     try {
+      // repairBlock spreads LAST so the corrected settlement/pnlCalc/winner/
+      // source strings win over any stale values from the original booking.
       merged = JSON.stringify({ ...(prev ? (JSON.parse(prev) as Record<string, unknown>) : {}), ...repairBlock })
     } catch {
       merged = JSON.stringify(repairBlock)
@@ -168,6 +187,7 @@ export function repairTrade(
   } catch (e) {
     return { applied: false, reason: `row rewrite failed: ${e instanceof Error ? e.message : String(e)}`, balanceDelta: 0 }
   }
+
 
   // Set the marker IMMEDIATELY after the row rewrite commits — the row is the
   // authority; everything after is compensation that must never repeat.
