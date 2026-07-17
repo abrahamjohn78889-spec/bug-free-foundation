@@ -117,7 +117,7 @@ describe("standing-order time-window matrix — PAPER_V1 & LIVE_V2", () => {
               price: limit,
               shares: 5,
               postOnly: false,
-              phase: "TRIGGERED",
+              phase: "PRIORITY_2",
               tif: "GTC",
               expireAtMs: null,
             }
