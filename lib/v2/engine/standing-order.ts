@@ -1104,7 +1104,7 @@ export class StandingOrderManager {
   }
 
   /**
-   * BUG #6 (bankroll reconciliation race): count of lots handed off to
+   * BUG #7 (bankroll reconciliation race): count of lots handed off to
    * `settleOfficial` whose payout has NOT yet been credited to the bankroll.
    * The LIVE_V2 balance reconciler must refuse to overwrite `bankroll.balance`
    * while this is non-zero: if it snapped the ledger to on-chain in that

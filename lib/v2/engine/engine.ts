@@ -748,7 +748,7 @@ export class Edge5Engine {
     // divergence from the ledger is a red flag (missed fill debit, missed
     // settlement credit, external deposit/withdrawal) — record it permanently.
     //
-    // BUG #6 (bankroll reconciliation race): NEVER overwrite the ledger while
+    // BUG #7 (bankroll reconciliation race): NEVER overwrite the ledger while
     // a settlement or fill is in flight. `rolloverSlot` dispatches
     // `settleOfficial` asynchronously and this method runs on the SAME
     // rollover; if on-chain USDC had already reflected a redeemed payout, the
