@@ -66,10 +66,11 @@ export function completeTrace(traceId: string | undefined): void {
   trace.completed = true
   const totalMs = performance.now() - trace.startMs
 
-  // Build summary
-  const summary = trace.points.map((p) => `${p.name}: ${p.duration?.toFixed(1) ?? "0.0"}ms`).join(" → ")
-
+  // Only build the summary string when we actually intend to log it.
+  // completeTrace() runs on every 20Hz strategy tick, so an unconditional
+  // .map().join() here allocated wasted per-tick garbage.
   if (totalMs > 100) {
+    const summary = trace.points.map((p) => `${p.name}: ${p.duration?.toFixed(1) ?? "0.0"}ms`).join(" → ")
     console.log(`[LATENCY] ${traceId}: ${summary} (total ${totalMs.toFixed(1)}ms)`)
   }
 }

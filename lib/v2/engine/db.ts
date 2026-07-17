@@ -13,6 +13,28 @@ import type { PipelineMode, SettledTrade, TradeSide } from "./types"
 let db: Database.Database | null = null
 
 /**
+ * Prepared-statement cache. better-sqlite3's `.prepare()` recompiles the SQL
+ * text on every call; hot paths like `updateOpenTradeMark` (per-tick while a
+ * position is open) and `kvGet`/`kvSet` (called via Bankroll on every access)
+ * benefit meaningfully from statement reuse. Keyed by (db, sql). The cache is
+ * invalidated automatically when the db handle is replaced (tests).
+ */
+const stmtCaches = new WeakMap<Database.Database, Map<string, Database.Statement>>()
+function prep(d: Database.Database, sql: string): Database.Statement {
+  let cache = stmtCaches.get(d)
+  if (!cache) {
+    cache = new Map()
+    stmtCaches.set(d, cache)
+  }
+  let stmt = cache.get(sql)
+  if (!stmt) {
+    stmt = d.prepare(sql)
+    cache.set(sql, stmt)
+  }
+  return stmt
+}
+
+/**
  * Queue for database writes to prevent blocking the execution engine.
  * All writes are asynchronously queued and executed in order.
  */
@@ -200,38 +222,42 @@ function scratchOrphanedOpenRows(d: Database.Database) {
   )
 
   // Refund per mode first, then stamp each row with the post-refund balance.
+  // Wrap the write burst in a single transaction so N orphan rows produce one
+  // WAL commit at boot instead of N.
   const totals = new Map<string, number>()
   for (const r of rows) totals.set(r.mode, (totals.get(r.mode) ?? 0) + r.cost)
   const finalBalance = new Map<string, number>()
-  for (const [mode, total] of totals) {
-    const balKey = `bankroll:${mode}:balance`
-    const cur = Number((kvRead.get(balKey) as { value: string } | undefined)?.value ?? 0)
-    const next = Math.round((cur + total) * 10000) / 10000
-    kvWrite.run(balKey, String(next))
-    const dust = Number((kvRead.get(`bankroll:${mode}:dust`) as { value: string } | undefined)?.value ?? 0)
-    finalBalance.set(mode, Math.round((next + dust) * 10000) / 10000)
-  }
-
-  for (const r of rows) {
-    settleRow.run(
-      finalBalance.get(r.mode) ?? 0,
-      JSON.stringify({
-        settlement: "SCRATCH — server restarted while the position was OPEN; the in-memory position was lost and the market outcome could not be verified",
-        pnlCalc: `entry cost $${r.cost.toFixed(4)} refunded to the capital pool; realized PnL $0.0000`,
-        recovery: "boot-time orphan recovery (cost refund applied)",
-      }),
-      r.id,
-    )
-  }
+  const applyRefunds = d.transaction(() => {
+    for (const [mode, total] of totals) {
+      const balKey = `bankroll:${mode}:balance`
+      const cur = Number((kvRead.get(balKey) as { value: string } | undefined)?.value ?? 0)
+      const next = Math.round((cur + total) * 10000) / 10000
+      kvWrite.run(balKey, String(next))
+      const dust = Number((kvRead.get(`bankroll:${mode}:dust`) as { value: string } | undefined)?.value ?? 0)
+      finalBalance.set(mode, Math.round((next + dust) * 10000) / 10000)
+    }
+    for (const r of rows) {
+      settleRow.run(
+        finalBalance.get(r.mode) ?? 0,
+        JSON.stringify({
+          settlement: "SCRATCH — server restarted while the position was OPEN; the in-memory position was lost and the market outcome could not be verified",
+          pnlCalc: `entry cost $${r.cost.toFixed(4)} refunded to the capital pool; realized PnL $0.0000`,
+          recovery: "boot-time orphan recovery (cost refund applied)",
+        }),
+        r.id,
+      )
+    }
+  })
+  applyRefunds()
 }
 
 export function kvGet(key: string): string | null {
-  const row = getDb().prepare("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined
+  const row = prep(getDb(), "SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined
   return row?.value ?? null
 }
 
 export function kvSet(key: string, value: string) {
-  getDb().prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
+  prep(getDb(), "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
 }
 
 /**
@@ -254,12 +280,11 @@ export function insertTrade(t: {
   explanation?: string | null
 }): void {
   queueWrite(() => {
-    getDb()
-      .prepare(
-        `INSERT INTO trades (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode, status, explanation)
+    prep(
+      getDb(),
+      `INSERT INTO trades (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode, status, explanation)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETTLED', ?)`,
-      )
-      .run(t.marketId, t.slotEndMs, t.side, t.price, t.shares, t.cost, t.result, t.pnl, t.balanceAfter, t.dustSaved, t.mode, t.explanation ?? null)
+    ).run(t.marketId, t.slotEndMs, t.side, t.price, t.shares, t.cost, t.result, t.pnl, t.balanceAfter, t.dustSaved, t.mode, t.explanation ?? null)
   })
 }
 
@@ -283,37 +308,38 @@ export function openTrade(t: {
   /** JSON audit record: why the trade opened (trigger, side selection, fill). */
   explanation?: string | null
 }): number {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO trades
+  const info = prep(
+    getDb(),
+    `INSERT INTO trades
         (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
          status, order_id, trade_uid, entry_at_ms, mark_price, unrealized_pnl, explanation)
        VALUES (?, ?, ?, ?, ?, ?, 'OPEN', 0, ?, 0, ?, 'OPEN', ?, ?, ?, ?, 0, ?)`,
-    )
-    .run(
-      t.marketId,
-      t.slotEndMs,
-      t.side,
-      t.price,
-      t.shares,
-      t.cost,
-      t.balanceAfter,
-      t.mode,
-      t.orderId ?? null,
-      t.tradeUid ?? null,
-      Date.now(),
-      t.price,
-      t.explanation ?? null,
-    )
+  ).run(
+    t.marketId,
+    t.slotEndMs,
+    t.side,
+    t.price,
+    t.shares,
+    t.cost,
+    t.balanceAfter,
+    t.mode,
+    t.orderId ?? null,
+    t.tradeUid ?? null,
+    Date.now(),
+    t.price,
+    t.explanation ?? null,
+  )
   return Number(info.lastInsertRowid)
 }
 
 /** Update the live mark + unrealized PnL on an OPEN trade row. */
 export function updateOpenTradeMark(id: number, markPrice: number, unrealizedPnl: number) {
   try {
-    getDb()
-      .prepare(`UPDATE trades SET mark_price = ?, unrealized_pnl = ? WHERE id = ? AND status = 'OPEN'`)
-      .run(markPrice, unrealizedPnl, id)
+    prep(getDb(), `UPDATE trades SET mark_price = ?, unrealized_pnl = ? WHERE id = ? AND status = 'OPEN'`).run(
+      markPrice,
+      unrealizedPnl,
+      id,
+    )
   } catch {
     /* live-mark updates must never crash the trading loop */
   }
@@ -350,18 +376,17 @@ export function settleTrade(t: {
   const d = getDb()
   let explanation: string | null = null
   if (t.explanation) {
-    const prev = (d.prepare(`SELECT explanation FROM trades WHERE id = ?`).get(t.id) as { explanation: string | null } | undefined)
+    const prev = (prep(d, `SELECT explanation FROM trades WHERE id = ?`).get(t.id) as { explanation: string | null } | undefined)
       ?.explanation ?? null
     explanation = mergeExplanations(prev, t.explanation)
   }
-  const info = d
-    .prepare(
-      `UPDATE trades
+  const info = prep(
+    d,
+    `UPDATE trades
          SET status = 'SETTLED', result = ?, pnl = ?, balance_after = ?, mark_price = ?, unrealized_pnl = NULL,
              settled_at = datetime('now'), explanation = COALESCE(?, explanation)
        WHERE id = ? AND status = 'OPEN'`,
-    )
-    .run(t.result, t.pnl, t.balanceAfter, t.markPrice, explanation, t.id)
+  ).run(t.result, t.pnl, t.balanceAfter, t.markPrice, explanation, t.id)
   return Number(info.changes ?? 0)
 }
 
@@ -372,7 +397,7 @@ export function settleTrade(t: {
  * balance is only known immediately after. Display-only field.
  */
 export function updateSettledBalance(id: number, balanceAfter: number) {
-  getDb().prepare(`UPDATE trades SET balance_after = ? WHERE id = ? AND status = 'SETTLED'`).run(balanceAfter, id)
+  prep(getDb(), `UPDATE trades SET balance_after = ? WHERE id = ? AND status = 'SETTLED'`).run(balanceAfter, id)
 }
 
 /**
@@ -392,13 +417,12 @@ export function closeOrphanedOpenTrades() {
 }
 
 export function recentTrades(mode: PipelineMode, limit = 200): SettledTrade[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT id, market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
+  const rows = prep(
+    getDb(),
+    `SELECT id, market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
               created_at, settled_at, status, order_id, trade_uid, entry_at_ms, mark_price, unrealized_pnl, explanation
        FROM trades WHERE mode = ? ORDER BY id DESC LIMIT ?`,
-    )
-    .all(mode, limit) as Array<Record<string, unknown>>
+  ).all(mode, limit) as Array<Record<string, unknown>>
   return rows.map((r) => ({
     id: r.id as number,
     marketId: r.market_id as string,
@@ -442,24 +466,23 @@ export function insertOrderLog(entry: {
   const ts = Date.now()
   queueWrite(() => {
     try {
-      getDb()
-        .prepare(
-          `INSERT INTO order_log (ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail)
+      prep(
+        getDb(),
+        `INSERT INTO order_log (ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          ts,
-          entry.mode,
-          entry.event,
-          entry.marketId,
-          entry.tokenId ?? null,
-          entry.exchangeOrderId ?? null,
-          entry.side ?? null,
-          entry.price ?? null,
-          entry.shares ?? null,
-          entry.phase ?? null,
-          entry.detail ?? null,
-        )
+      ).run(
+        ts,
+        entry.mode,
+        entry.event,
+        entry.marketId,
+        entry.tokenId ?? null,
+        entry.exchangeOrderId ?? null,
+        entry.side ?? null,
+        entry.price ?? null,
+        entry.shares ?? null,
+        entry.phase ?? null,
+        entry.detail ?? null,
+      )
     } catch {
       // audit logging must never crash the trading loop
     }
@@ -467,9 +490,13 @@ export function insertOrderLog(entry: {
 }
 
 export function recentOrderLogs(mode: PipelineMode, limit = 100): Array<Record<string, unknown>> {
-  return getDb()
-    .prepare(`SELECT * FROM order_log WHERE mode = ? ORDER BY id DESC LIMIT ?`)
-    .all(mode, limit) as Array<Record<string, unknown>>
+  // Explicit projection avoids pulling unused columns over the wire on every
+  // dashboard poll (was `SELECT *`).
+  return prep(
+    getDb(),
+    `SELECT id, ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail
+       FROM order_log WHERE mode = ? ORDER BY id DESC LIMIT ?`,
+  ).all(mode, limit) as Array<Record<string, unknown>>
 }
 
 /**
@@ -625,13 +652,17 @@ export interface AuditRow {
   message: string
 }
 
-/** Append an audit entry. Must never crash any caller. */
+/** Append an audit entry. Must never crash any caller — writes are queued
+ *  off the trading loop so warn/error events never fsync-block the caller. */
 export function insertAuditLog(level: string, category: string, message: string) {
-  try {
-    getDb().prepare(`INSERT INTO audit_log (ts_ms, level, category, message) VALUES (?, ?, ?, ?)`).run(Date.now(), level, category, message)
-  } catch {
-    /* audit persistence is best-effort */
-  }
+  const ts = Date.now()
+  queueWrite(() => {
+    try {
+      prep(getDb(), `INSERT INTO audit_log (ts_ms, level, category, message) VALUES (?, ?, ?, ?)`).run(ts, level, category, message)
+    } catch {
+      /* audit persistence is best-effort */
+    }
+  })
 }
 
 /** Filter + full-text search over the audit log (newest first). */

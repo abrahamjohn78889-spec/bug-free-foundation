@@ -4,7 +4,41 @@ All notable changes to P4 are documented here.
 
 ## [Unreleased]
 
+### Performance (Pass 1 — Hot-Path Micro-Optimizations)
+
+Targeted, behavior-preserving hot-path wins identified by a survey pass.
+No trading strategy, math, or ordering changes.
+
+- **Prepared-statement caching in `lib/v2/engine/db.ts`.** better-sqlite3's
+  `.prepare()` recompiles the SQL text on every call; the hot-path helpers
+  (`kvGet`, `kvSet`, `insertTrade`, `openTrade`, `updateOpenTradeMark`,
+  `settleTrade`, `updateSettledBalance`, `recentTrades`, `insertOrderLog`,
+  `recentOrderLogs`, `insertAuditLog`) now go through a module-scope
+  `prep(db, sql)` cache keyed by `(db, sql)` via a `WeakMap`. Biggest gain
+  on `updateOpenTradeMark` (per-tick while a position is open) and
+  `kv*` (called via every `Bankroll` getter).
+- **`insertAuditLog` no longer blocks the caller.** Every warn/error
+  `logEvent` used to issue a synchronous SQLite write inline; the insert
+  is now routed through the existing `queueWrite` off-loop path, matching
+  `insertTrade` / `insertOrderLog`.
+- **`latency-trace.completeTrace` no longer allocates unconditionally.**
+  The `.map().join()` summary string is now built only when `totalMs > 100`
+  (previously computed on every 20 Hz tick and thrown away). Behavior
+  unchanged — the log line is the sole consumer.
+- **`scratchOrphanedOpenRows` wraps its refund + settle burst in a single
+  `db.transaction()`.** N orphan rows at boot now produce one WAL commit
+  instead of N.
+- **`recentOrderLogs` uses explicit column projection** instead of
+  `SELECT *`, avoiding pulling unused columns on every dashboard poll.
+
+Deferred to a follow-up (flagged as risky-adjacent): local-caching of
+`Bankroll.balance` / `dustReserve` / `startingBalance` within a single
+synchronous settlement flow. Correct read-after-write ordering must be
+preserved exactly, so a targeted refactor at each call site is preferred
+over a getter-level cache.
+
 ### Fixed
+
 
 - **Order submission retry & idempotency across WS reconnects (Bug #014,
   PAPER_V1 + LIVE_V2).** `handlePlacementFailure` now actively retries
