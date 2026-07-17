@@ -86,6 +86,8 @@ interface RestingOrder {
   /** checkFill must report a given fill exactly once — a second call
    *  re-reporting the same shares would double-book the trade upstream. */
   fillReported: boolean
+  /** Share-weighted average fill price across partial matches (Bug #013). */
+  filledNotional: number
 }
 
 function sleep(ms: number): Promise<void> {
