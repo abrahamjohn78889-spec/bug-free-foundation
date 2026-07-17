@@ -145,10 +145,14 @@ export function repairTrade(
   // SCRATCH to WIN appear in the dashboard as "WIN +$0.10" next to a
   // "SCRATCH — cost refunded; realized PnL $0.0000" explanation, which is
   // exactly the accounting-mismatch users see on the compounding ledger.
+  // NOTE: do NOT mention the prior result label (e.g. "SCRATCH") in these
+  // human-readable strings — the audit trail lives in `settlementRepair.old`.
+  // Bug #004b test asserts the visible settlement text no longer echoes the
+  // stale label so the ledger UI can't contradict itself.
   const repairedSettlementText = won
-    ? `WIN — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); each share paid out $1.00 [auto-repaired from ${trade.result}]`
-    : `LOSS — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); shares expired worthless [auto-repaired from ${trade.result}]`
-  const repairedPnlCalcText = `payout $${expected.payout.toFixed(4)} − cost $${trade.cost.toFixed(4)} = ${expected.pnl >= 0 ? "+" : ""}$${expected.pnl.toFixed(4)} [auto-repaired]`
+    ? `WIN — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); each share paid out $1.00 (auto-repaired)`
+    : `LOSS — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); shares expired worthless (auto-repaired)`
+  const repairedPnlCalcText = `payout $${expected.payout.toFixed(4)} − cost $${trade.cost.toFixed(4)} = ${expected.pnl >= 0 ? "+" : ""}$${expected.pnl.toFixed(4)} (auto-repaired)`
   const repairBlock = {
     settlement: repairedSettlementText,
     pnlCalc: repairedPnlCalcText,
