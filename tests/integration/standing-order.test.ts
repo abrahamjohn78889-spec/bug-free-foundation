@@ -270,7 +270,9 @@ describe("StandingOrderManager — safety guards", () => {
     const s = h.snap()!
     expect(s.status).toBe("ARMED")
     expect(s.executionCount).toBe(0)
-    expect(s.lockedDirection).toBeNull()
+    // Bug #002 fix: direction locks at window open once a majority is
+    // available, not at trigger. UP is the BTC-reference majority here.
+    expect(s.lockedDirection).toBe("UP")
 
     // Now push UP through the trigger — it should lock and fill on the next tick.
     h.setPrices(0.9, 0.5)
