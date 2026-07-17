@@ -9,6 +9,8 @@
     "dist-check": "bun run build-placeholder.js",
     "start": "bun run serve.js",
     "lint": "echo skipped",
-    "test": "echo skipped"
+    "test": "echo skipped",
+    "prod:install": "cp package.production.json package.json && cp tsconfig.production.json tsconfig.json && pnpm install",
+    "derive-creds": "node scripts/derive-clob-credentials.mjs"
   }
 }
