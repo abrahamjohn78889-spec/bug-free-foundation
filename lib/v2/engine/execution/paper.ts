@@ -326,7 +326,11 @@ export class PaperExecutor implements Executor {
     }
     const filledShares = matched
     const filledOrder = filledShares !== order.shares ? { ...order, shares: filledShares } : order
-    return { order: filledOrder, filledPrice: order.price }
+    // Bug #013 — report the SHARE-WEIGHTED AVG fill price actually paid,
+    // not the outer limit. Falls back to limit only if notional never
+    // accumulated (defensive; shouldn't happen when matched > 0).
+    const avgPrice = resting.filledNotional > 0 && matched > 0 ? resting.filledNotional / matched : order.price
+    return { order: filledOrder, filledPrice: avgPrice }
   }
 
   async getOrderState(order: OpenOrder): Promise<OrderState> {
