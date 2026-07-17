@@ -417,13 +417,12 @@ export function closeOrphanedOpenTrades() {
 }
 
 export function recentTrades(mode: PipelineMode, limit = 200): SettledTrade[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT id, market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
+  const rows = prep(
+    getDb(),
+    `SELECT id, market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
               created_at, settled_at, status, order_id, trade_uid, entry_at_ms, mark_price, unrealized_pnl, explanation
        FROM trades WHERE mode = ? ORDER BY id DESC LIMIT ?`,
-    )
-    .all(mode, limit) as Array<Record<string, unknown>>
+  ).all(mode, limit) as Array<Record<string, unknown>>
   return rows.map((r) => ({
     id: r.id as number,
     marketId: r.market_id as string,
