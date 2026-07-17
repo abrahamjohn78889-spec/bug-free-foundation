@@ -155,6 +155,30 @@ function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts_ms);
     CREATE INDEX IF NOT EXISTS idx_audit_cat_ts ON audit_log(category, ts_ms);
+    -- Persistent execution-latency samples: one row per submitted standing
+    -- limit order. Publish (submit start) → ack → observed fill. Used by the
+    -- /report page to track latency regressions across restarts.
+    CREATE TABLE IF NOT EXISTS latency_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms INTEGER NOT NULL,
+      mode TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      exchange_order_id TEXT,
+      side TEXT,
+      shares INTEGER,
+      limit_price REAL,
+      quote_age_ms INTEGER NOT NULL,
+      decision_ms INTEGER NOT NULL,
+      pre_submit_ms INTEGER NOT NULL,
+      submit_ms INTEGER NOT NULL,
+      fill_check_ms INTEGER NOT NULL,
+      total_ms INTEGER NOT NULL,
+      submit_at_ms INTEGER NOT NULL,
+      fill_observed_ms INTEGER,
+      filled_price REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_latency_mode_ts ON latency_samples(mode, ts_ms);
+    CREATE INDEX IF NOT EXISTS idx_latency_order ON latency_samples(exchange_order_id);
   `)
 
   // ---- Lifecycle migration: open→settled columns (idempotent) ----
@@ -797,4 +821,182 @@ export function exportTrades(mode: PipelineMode): Array<Record<string, unknown>>
   return getDb()
     .prepare(`SELECT * FROM trades WHERE mode = ? ORDER BY id ASC`)
     .all(mode) as Array<Record<string, unknown>>
+}
+
+// ------------------------------------------------------------
+// Persistent execution-latency samples (see latency_samples table).
+// One row per submitted standing limit order. Writes are queued through
+// queueWrite so the trading hot path is never blocked.
+// ------------------------------------------------------------
+
+export interface LatencySampleInsert {
+  mode: PipelineMode
+  marketId: string
+  exchangeOrderId: string | null
+  side: TradeSide | null
+  shares: number | null
+  limitPrice: number | null
+  quoteAgeMs: number
+  decisionMs: number
+  preSubmitMs: number
+  submitMs: number
+  fillCheckMs: number
+  totalMs: number
+  submitAtMs: number
+}
+
+export interface LatencySampleRow {
+  id: number
+  ts_ms: number
+  mode: string
+  market_id: string
+  exchange_order_id: string | null
+  side: string | null
+  shares: number | null
+  limit_price: number | null
+  quote_age_ms: number
+  decision_ms: number
+  pre_submit_ms: number
+  submit_ms: number
+  fill_check_ms: number
+  total_ms: number
+  submit_at_ms: number
+  fill_observed_ms: number | null
+  filled_price: number | null
+}
+
+export function insertLatencySample(s: LatencySampleInsert): void {
+  queueWrite(() => {
+    prep(
+      getDb(),
+      `INSERT INTO latency_samples
+         (ts_ms, mode, market_id, exchange_order_id, side, shares, limit_price,
+          quote_age_ms, decision_ms, pre_submit_ms, submit_ms, fill_check_ms,
+          total_ms, submit_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      Date.now(),
+      s.mode,
+      s.marketId,
+      s.exchangeOrderId,
+      s.side,
+      s.shares,
+      s.limitPrice,
+      Math.round(s.quoteAgeMs),
+      Math.round(s.decisionMs),
+      Math.round(s.preSubmitMs),
+      Math.round(s.submitMs),
+      Math.round(s.fillCheckMs),
+      Math.round(s.totalMs),
+      Math.round(s.submitAtMs),
+    )
+  })
+}
+
+/** Record the observed fill time (ms since publish/submit) for the sample
+ *  keyed by exchange order id. No-op if we never persisted a sample for it. */
+export function recordLatencyFillObserved(
+  exchangeOrderId: string | null | undefined,
+  filledPrice: number,
+  filledAtMs: number,
+): void {
+  if (!exchangeOrderId) return
+  queueWrite(() => {
+    prep(
+      getDb(),
+      `UPDATE latency_samples
+         SET fill_observed_ms = MAX(0, ? - submit_at_ms),
+             filled_price = ?
+       WHERE exchange_order_id = ? AND fill_observed_ms IS NULL`,
+    ).run(Math.round(filledAtMs), filledPrice, exchangeOrderId)
+  })
+}
+
+export function getLatencySamples(mode: PipelineMode, limit = 50): LatencySampleRow[] {
+  return prep(
+    getDb(),
+    `SELECT * FROM latency_samples WHERE mode = ? ORDER BY id DESC LIMIT ?`,
+  ).all(mode, Math.max(1, Math.min(500, limit))) as LatencySampleRow[]
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0
+  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p))
+  return sorted[idx]
+}
+
+export interface LatencyPhaseStat {
+  count: number
+  avg: number
+  p50: number
+  p95: number
+  max: number
+}
+
+export interface LatencyReport {
+  mode: PipelineMode
+  windowMs: number
+  windowStartMs: number
+  sampleCount: number
+  filledCount: number
+  phases: {
+    quoteAge: LatencyPhaseStat
+    decision: LatencyPhaseStat
+    preSubmit: LatencyPhaseStat
+    submit: LatencyPhaseStat
+    fillCheck: LatencyPhaseStat
+    total: LatencyPhaseStat
+    fillObserved: LatencyPhaseStat
+  }
+}
+
+/** Aggregate percentile stats over the last `windowMs` for a given mode. */
+export function getLatencyReport(mode: PipelineMode, windowMs = 24 * 60 * 60 * 1000): LatencyReport {
+  const windowStartMs = Date.now() - windowMs
+  const rows = prep(
+    getDb(),
+    `SELECT quote_age_ms, decision_ms, pre_submit_ms, submit_ms, fill_check_ms,
+            total_ms, fill_observed_ms
+       FROM latency_samples
+       WHERE mode = ? AND ts_ms >= ?`,
+  ).all(mode, windowStartMs) as Array<{
+    quote_age_ms: number
+    decision_ms: number
+    pre_submit_ms: number
+    submit_ms: number
+    fill_check_ms: number
+    total_ms: number
+    fill_observed_ms: number | null
+  }>
+
+  const stat = (values: number[]): LatencyPhaseStat => {
+    if (values.length === 0) return { count: 0, avg: 0, p50: 0, p95: 0, max: 0 }
+    const sorted = [...values].sort((a, b) => a - b)
+    const sum = sorted.reduce((a, b) => a + b, 0)
+    return {
+      count: sorted.length,
+      avg: Math.round(sum / sorted.length),
+      p50: percentile(sorted, 0.5),
+      p95: percentile(sorted, 0.95),
+      max: sorted[sorted.length - 1],
+    }
+  }
+
+  const filled = rows.filter((r) => r.fill_observed_ms != null).map((r) => r.fill_observed_ms as number)
+  return {
+    mode,
+    windowMs,
+    windowStartMs,
+    sampleCount: rows.length,
+    filledCount: filled.length,
+    phases: {
+      quoteAge: stat(rows.map((r) => r.quote_age_ms)),
+      decision: stat(rows.map((r) => r.decision_ms)),
+      preSubmit: stat(rows.map((r) => r.pre_submit_ms)),
+      submit: stat(rows.map((r) => r.submit_ms)),
+      fillCheck: stat(rows.map((r) => r.fill_check_ms)),
+      total: stat(rows.map((r) => r.total_ms)),
+      fillObserved: stat(filled),
+    },
+  }
 }
