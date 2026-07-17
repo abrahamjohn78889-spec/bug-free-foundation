@@ -112,20 +112,21 @@ export function computeHealth(): HealthReport {
     // a 3× slack to absorb book congestion and rollover edge cases before
     // flagging the pipeline as degraded.
     const slo = snap.standingLimitOrder
-    if (slo && slo.status === "RESTING" && slo.entryWindowMs > 0) {
+    const windowMs = slo?.entryWindowMs ?? 0
+    if (slo && slo.status === "RESTING" && windowMs > 0) {
       const restingAgeMs = slo.slotEndMs ? slo.slotEndMs - Date.now() : 0
       // slotEndMs is in the FUTURE for a healthy resting order. When it goes
       // NEGATIVE, the rollover watchdog should have already cancelled it —
       // if not, the pipeline is stalled.
       const stalledMs = restingAgeMs < 0 ? -restingAgeMs : 0
-      const stallThresholdMs = Math.max(slo.entryWindowMs * 2, 15_000)
+      const stallThresholdMs = Math.max(windowMs * 2, 15_000)
       const executionStalled = stalledMs > stallThresholdMs
       checks.execution = {
         ok: !executionStalled,
         severity: executionStalled ? "critical" : "info",
         detail: executionStalled
           ? `RESTING order ${stalledMs}ms past slot end (threshold ${stallThresholdMs}ms) — rollover may have failed`
-          : `resting order healthy (window ${slo.entryWindowMs}ms, slot ends in ${restingAgeMs}ms)`,
+          : `resting order healthy (window ${windowMs}ms, slot ends in ${restingAgeMs}ms)`,
       }
     } else {
       checks.execution = {
