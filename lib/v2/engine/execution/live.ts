@@ -39,10 +39,15 @@ function parseTsMs(raw: string | number | undefined | null): number {
   return Number.isFinite(iso) ? iso : 0
 }
 
-// Maker-only: never cross the spread, always provide resting liquidity.
-const POST_ONLY = true
+// Default posture: maker-only. Callers with a marketable-intent order (e.g.
+// standing-order trigger fire) must opt out via `req.postOnly = false`; see
+// Bug #009 in docs/investigations/. Never flip this default without auditing
+// every placeOrder call site — many rely on post-only for maker rebates and
+// price protection.
+const POST_ONLY_DEFAULT = true
 // CLOB V2 mandates an explicit tick size in the order options.
 const TICK_SIZE = "0.01" as const
+
 
 /**
  * ethers v6 exposes `signTypedData`, but the SDK's ClobSigner contract expects
@@ -123,12 +128,13 @@ export class LiveExecutor implements Executor {
   async placeOrder(req: PlaceOrderRequest): Promise<OpenOrder> {
     const { price, size } = this.clean(req)
     const { orderType, expiration } = this.orderTiming(req)
+    const postOnly = req.postOnly ?? POST_ONLY_DEFAULT
 
     const resp = await this.client.createAndPostOrder(
       { tokenID: req.tokenId, price, side: Side.BUY, size, expiration },
       { tickSize: TICK_SIZE },
       orderType,
-      POST_ONLY,
+      postOnly,
     )
 
     if (resp && resp.success === false) {
@@ -137,7 +143,7 @@ export class LiveExecutor implements Executor {
     const exchangeOrderId: string | null = resp?.orderID ?? resp?.orderId ?? null
     logEvent(
       "info",
-      `[LIVE_V2] Maker order live: ${req.side} ${size} @ $${price.toFixed(2)} (${orderType}, id ${exchangeOrderId})`,
+      `[LIVE_V2] ${postOnly ? "Maker" : "Taker-allowed"} order live: ${req.side} ${size} @ $${price.toFixed(2)} (${orderType}, id ${exchangeOrderId})`,
     )
 
     return {
@@ -152,6 +158,7 @@ export class LiveExecutor implements Executor {
       phase: req.phase,
     }
   }
+
 
   async cancelOrder(order: OpenOrder): Promise<void> {
     if (!order.exchangeOrderId) return
