@@ -2148,7 +2148,47 @@ export class StandingOrderManager {
     this.bumpEpoch("rollover")
     // New slot → fresh withhold log throttle (one row per reason per slot).
     this.loggedWithholds.clear()
+    // BUG #010 — Short-window fill loss at rollover.
+    //   With a short entry window (5s / 15s / 30s) the trigger can fire in
+    //   the last few hundred ms of the slot. If the order matches on the
+    //   exchange between the last tick's checkFill poll and this rollover,
+    //   the previous code cancelled the resting order without a final fill
+    //   check, so the fill was silently discarded from the SLO ledger even
+    //   though the account owned the shares on-chain. Do one last, epoch-
+    //   safe checkFill BEFORE cancelling — if it returns a fill, book it
+    //   through onFill so the position is recorded and settleOfficial can
+    //   resolve it below.
+    if (this.restingOrder && this.executor) {
+      try {
+        const finalFill = await withTimeout(
+          this.executor.checkFill(this.restingOrder),
+          EXEC_CALL_TIMEOUT_MS,
+          "checkFill-rollover",
+        )
+        if (finalFill && this.restingOrder) {
+          const resting = this.restingOrder
+          this.restingOrder = null
+          this.restingSide = null
+          this.onFill(finalFill.order, finalFill.filledPrice)
+          insertOrderLog({
+            mode: this.deps.getMode(),
+            event: "FILLED",
+            marketId: resting.marketId,
+            tokenId: resting.tokenId,
+            exchangeOrderId: resting.exchangeOrderId,
+            side: resting.side,
+            price: finalFill.filledPrice,
+            shares: finalFill.order.shares,
+            phase: "WAITING",
+            detail: "standing-limit fill detected at rollover (short-window race — bug #010)",
+          })
+        }
+      } catch {
+        /* fall through to cancel — reconciler is the outer safety net */
+      }
+    }
     this.cancelRestingOrder()
+
 
     const positions = this.positions
     this.positions = []
