@@ -39,15 +39,29 @@ export interface ChaosProfile {
   outageUntilMs: number
 }
 
+// BUG #6 (paper partial-fill unrealism): the previous default of 15% synthetic
+// partial fills produced ledger rows where a 7-share FIXED_SHARES order booked
+// as 2 or 3 shares (see user report, image-7.png trades #130, #136). At the
+// order sizes P4 uses ($0.90-$1.00 · single-digit shares ≈ a few dollars) a
+// real Polymarket CLOB order fills fully — book depth dwarfs the request by
+// orders of magnitude, and the executor already cancels any true remainder at
+// the exchange. Simulating 15% partial fills in paper mode therefore does not
+// mirror LIVE_V2 behavior; it invents variance that never appears in
+// production, breaks the "FIXED_SHARES buys exactly N shares" contract in the
+// ledger, and confounds compounding review because the next PERCENT slot
+// compounds off a smaller-than-expected payout. Default the rate to 0; the
+// chaos machinery is retained so tests and adversarial simulations can opt in
+// via the constructor `chaos` override or a future env knob.
 export const DEFAULT_CHAOS: ChaosProfile = {
   latencyMinMs: 40,
   latencyMaxMs: 220,
   rejectRate: 0.05,
   timeoutRate: 0.03,
-  partialFillRate: 0.15,
+  partialFillRate: 0,
   slowAckRate: 0.08,
   outageUntilMs: 0,
 }
+
 
 /** Deterministic profile for unit/integration tests: no randomness, no delay. */
 export const ZERO_CHAOS: ChaosProfile = {
