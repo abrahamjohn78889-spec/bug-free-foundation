@@ -1653,35 +1653,42 @@ export class StandingOrderManager {
         // ---- LATENCY (stage 2): decision → placeOrder start ----
         const submitStartMs = Date.now()
         let placedOrder: OpenOrder
+        const placeReq: PlaceOrderRequest = {
+          marketId: ids.marketId,
+          tokenId: ids.tokenId,
+          side,
+          price: limitPrice,
+          shares,
+          phase: "WAITING",
+          tif: "GTC",
+          expireAtMs: null,
+          // Bug #009: the trigger fires the moment the ask reaches
+          // triggerPrice, so limitPrice (≥ triggerPrice by validation) is
+          // marketable when we submit. LIVE_V2 must NOT post-only this —
+          // CLOB would reject it as "would cross the spread" and no
+          // triggered order would ever fill. Taker acceptance is the
+          // strategy's whole point here.
+          postOnly: false,
+        }
         try {
           // Timeout-bounded: a hung placement resolves as an AMBIGUOUS failure
           // (handled below with exchange-state verification + adoption), never
           // as a permanently wedged tick.
           placedOrder = await withTimeout(
-            this.executor.placeOrder({
-              marketId: ids.marketId,
-              tokenId: ids.tokenId,
-              side,
-              price: limitPrice,
-              shares,
-              phase: "WAITING",
-              tif: "GTC",
-              expireAtMs: null,
-              // Bug #009: the trigger fires the moment the ask reaches
-              // triggerPrice, so limitPrice (≥ triggerPrice by validation) is
-              // marketable when we submit. LIVE_V2 must NOT post-only this —
-              // CLOB would reject it as "would cross the spread" and no
-              // triggered order would ever fill. Taker acceptance is the
-              // strategy's whole point here.
-              postOnly: false,
-            }),
+            this.executor.placeOrder(placeReq),
             EXEC_CALL_TIMEOUT_MS,
             "placeOrder",
           )
-
         } catch (e) {
-          await this.handlePlacementFailure(side, ids, e)
-          return
+          // BUG #014 — WS-reconnect / transient submission failure hardening.
+          // handlePlacementFailure now: (1) scans for adoption, (2) actively
+          // retries transient failures with backoff, (3) only re-arms the
+          // trigger when the order is confirmably absent AND retries are
+          // exhausted or the error is terminal. On successful adoption or
+          // retry it sets restingOrder/status=RESTING and returns the order.
+          const recovered = await this.handlePlacementFailure(side, ids, e, placeReq, myEpoch)
+          if (!recovered) return
+          placedOrder = recovered
         }
         // ---- LATENCY (stage 3): exchange ack received ----
         const ackMs = Date.now()
