@@ -747,6 +747,24 @@ export class Edge5Engine {
     // LIVE_V2: audited reconciliation. On-chain is truth, but any material
     // divergence from the ledger is a red flag (missed fill debit, missed
     // settlement credit, external deposit/withdrawal) — record it permanently.
+    //
+    // BUG #7 (bankroll reconciliation race): NEVER overwrite the ledger while
+    // a settlement or fill is in flight. `rolloverSlot` dispatches
+    // `settleOfficial` asynchronously and this method runs on the SAME
+    // rollover; if on-chain USDC had already reflected a redeemed payout, the
+    // overwrite would snap the ledger up by +payout and the subsequent
+    // `bankroll.settle(payout)` would then credit the payout a SECOND time.
+    // The per-settlement invariant check reads `openingTotal` AFTER the
+    // stomp, so it cannot detect the drift. Defer reconciliation until the
+    // next rollover — the on-chain number isn't going anywhere.
+    const pendingSettles = this.standingOrders?.pendingSettlementCount() ?? 0
+    if (pendingSettles > 0 || this.pendingResolutions > 0 || this.openOrder !== null) {
+      logEvent(
+        "info",
+        `[LIVE_V2] balance reconciliation DEFERRED: ${pendingSettles} pending settlement(s), ${this.pendingResolutions} pending resolution(s), openOrder=${this.openOrder !== null ? "yes" : "no"} — will retry on next rollover (on-chain $${usd.toFixed(2)} vs ledger pool $${pool.toFixed(2)})`,
+      )
+      return
+    }
     const drift = usd - pool
     if (Math.abs(drift) > 0.05) {
       logEvent(
@@ -764,6 +782,7 @@ export class Edge5Engine {
     this.bankroll.balance = Math.max(0, Math.round((usd - this.bankroll.dustReserve) * 10000) / 10000)
     logEvent("info", `[LIVE_V2] Live balance reconciled: $${usd.toFixed(2)} on-chain (pool $${(this.bankroll.balance + this.bankroll.dustReserve).toFixed(2)})`)
   }
+
 
   /**
    * Condition IDs of the markets the engine is ACTIVELY monitoring right now.
