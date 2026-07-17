@@ -6,6 +6,24 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #007 — LIVE_V2 bankroll reconciliation race (P0).** `syncLiveBalance`
+  overwrote `bankroll.balance` from on-chain USDC on every rollover, racing
+  the async `settleOfficial` dispatched by `rolloverSlot`. On-chain
+  redemption landing before the async settle credit produced a silent
+  double-credit; the reverse ordering produced a silent lost-credit. The
+  per-settlement accounting invariant read `openingTotal` AFTER the stomp
+  and could not detect either. Fix: defer the LIVE_V2 overwrite whenever any
+  of `pendingSettlementCount > 0`, `pendingResolutions > 0`, or
+  `openOrder !== null` is true — next rollover retries. Added
+  `pendingSettlementCount()` accessor on `StandingOrderManager`. PAPER_V1
+  unaffected. Regression tests:
+  `tests/integration/bug-007-bankroll-reconciliation.test.ts`. Report:
+  `docs/investigations/bug-007-bankroll-reconciliation.md`.
+
+
+
+### Fixed
+
 - **Bug #006 — Paper simulator invents partial fills, breaking FIXED_SHARES
   ledger contract (P0, PAPER_V1 only).** `DEFAULT_CHAOS.partialFillRate` was
   0.15, so a FIXED_SHARES=7 order would occasionally book as 2 or 3 shares in
