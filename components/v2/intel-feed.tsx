@@ -38,6 +38,10 @@ function statusOf(snap: EngineSnapshot): { label: string; tone: "green" | "orang
         label: "MARKET SETTLED BEFORE SUBMISSION — RE-ARMS ON THE NEXT 5-MIN MARKET",
         tone: "orange",
       },
+      WAITING_SETTLE: {
+        label: "WAITING FOR PRIOR SETTLEMENT TO CREDIT BEFORE NEXT ENTRY",
+        tone: "orange",
+      },
     }
     return map[sl.status] ?? { label: `STANDING LIMIT ORDER — ${sl.status}`, tone: "green" }
   }
