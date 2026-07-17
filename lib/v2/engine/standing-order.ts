@@ -271,6 +271,23 @@ export class StandingOrderManager {
    * unaffected because their size does not depend on bankroll.
    */
   private pendingSettlementUids = new Set<string>()
+  /**
+   * BUG #011 — Duplicate-booking guard for onFill.
+   *   `onFill` opens a ledger row, debits the bankroll, and pushes a lot in a
+   *   single pass with NO idempotency key. Every known caller (pollRestingFill,
+   *   rolloverSlot's final checkFill, submit-time immediate fill) is epoch- or
+   *   restingOrder-guarded, so today only one of them books a given order —
+   *   but the invariant is fragile. A retried rollover, a duplicate checkFill
+   *   ack, or any future caller could double-book (duplicate ledger row PLUS
+   *   double debit) or, symmetrically, leave a stale entry with no matching
+   *   reversal if the resting-order clear happens twice.
+   *   Track every exchangeOrderId we have already booked (per market slot,
+   *   cleared at rollover) and short-circuit any second onFill for the same
+   *   order id. Also gate the rollover final-checkFill so it never books an
+   *   id already booked by pollRestingFill.
+   */
+  private bookedFillOrderIds = new Set<string>()
+
 
   private slotEndMs = 0
   private strike: number | null = null
@@ -1992,6 +2009,36 @@ export class StandingOrderManager {
   }
 
   private onFill(order: OpenOrder, filledPrice: number) {
+    // BUG #011 — refuse duplicate bookings for the same exchange order id.
+    // Two callers arriving at the same order (poll + rollover retry, retried
+    // rollover, exchange re-ack) MUST NOT produce two ledger rows and two
+    // bankroll debits. First writer wins; every subsequent call is a no-op.
+    const oid = order.exchangeOrderId
+    if (oid && this.bookedFillOrderIds.has(oid)) {
+      insertOrderLog({
+        mode: this.deps.getMode(),
+        event: "FILLED",
+        marketId: order.marketId,
+        tokenId: order.tokenId,
+        exchangeOrderId: oid,
+        side: order.side,
+        price: filledPrice,
+        shares: order.shares,
+        phase: "WAITING",
+        detail: "duplicate onFill suppressed (bug #011 idempotency guard)",
+      })
+      // Clear any lingering resting pointer to the same order — the ledger
+      // already owns this fill; leaving restingOrder set would risk another
+      // cancel/checkFill round-trip against a completed order.
+      if (this.restingOrder?.exchangeOrderId === oid) {
+        this.restingOrder = null
+        this.restingSide = null
+      }
+      return
+    }
+    if (oid) this.bookedFillOrderIds.add(oid)
+
+
     const cost = Math.round(order.shares * filledPrice * 10000) / 10000
     const bankroll = this.deps.getBankroll()
     bankroll.debitFixed(cost)
@@ -2188,6 +2235,11 @@ export class StandingOrderManager {
       }
     }
     this.cancelRestingOrder()
+    // BUG #011 — new slot, new orders: reset the per-slot booked-id set so
+    // fresh exchange order ids never collide with a previous slot's guard.
+    this.bookedFillOrderIds.clear()
+
+
 
 
     const positions = this.positions
