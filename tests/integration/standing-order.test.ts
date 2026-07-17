@@ -409,7 +409,8 @@ describe("StandingOrderManager — Bug #003 standing-order placement integrity",
     s = h.snap()!
     expect(s.executionCount).toBe(1)
     expect(s.openPosition?.side).toBe("UP")
-    expect(s.openPosition?.price).toBeCloseTo(0.99, 5)
+    // Bug #013 taker-realism: fill price = min(limit 0.99, live ask 0.98) = 0.98.
+    expect(s.openPosition?.price).toBeCloseTo(0.98, 5)
   })
 })
 
