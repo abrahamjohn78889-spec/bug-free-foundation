@@ -37,11 +37,27 @@ All notable changes to P4 are documented here.
   post-settlement auto-repair. **Verdict: no defect — pipeline correct and
   already covered by existing regression suites (mapped in the report).**
   Report: `docs/investigations/bug-004-fill-settlement-pnl.md`.
-
-
-
+- **Bug #004b — Post-repair PnL / explanation mismatch on the compounding
+  ledger (P0).** After the settlement-verifier auto-repaired a soft-settled
+  trade (SCRATCH / spot-fallback / wrong side) against the official Polymarket
+  resolution, the row's STATUS + PnL columns reflected the corrected outcome
+  but the human-readable `settlement`, `pnlCalc`, `resolvedWinner`, and
+  `resolutionSource` fields inside `explanation` stayed frozen at the original
+  booking. The ledger UI then showed contradictions like "LOSS −$9.00" next to
+  "SCRATCH — cost refunded; realized PnL $0.0000", and correctly-repaired WINs
+  read like losses. Report: `docs/investigations/bug-004b-post-repair-mismatch.md`.
 
 ### Fixed
+
+- **Post-repair explanation coherence (Bug #004b):** `repairTrade` now
+  overwrites `settlement`, `pnlCalc`, `resolvedWinner`, and `resolutionSource`
+  inside the same atomic explanation merge that rewrites `result` / `pnl` /
+  `mark_price`, so every auto-repaired ledger row tells a single coherent
+  story (STATUS, PnL, "WHY IT SETTLED THIS WAY", and "PNL MATH" all agree).
+  The original booked values are still preserved forever inside
+  `settlementRepair.old` for the audit trail. Applies to PAPER_V1 and LIVE_V2.
+  Regression test in `tests/integration/settlement-integrity.test.ts`.
+
 
 - **Standing limit direction selection:** replaced race-to-trigger side
   selection with BTC-reference majority-only trigger selection. The bot now
