@@ -6,6 +6,20 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #008 — LiveExecutor.checkFill over-reports on MATCHED status with
+  under-matched size (P1, LIVE_V2 only).** `isFullyFilled` treated
+  `status === "MATCHED"` as an unconditional full-fill signal, so an exchange
+  response of `{ status: "MATCHED", size_matched: 4 }` for a 7-share order
+  booked the ledger as 7 shares filled — over-crediting cost/payout for shares
+  the account never received. Fix: trust `size_matched` over `status`; only
+  fall back to `order.shares` when `size_matched` is absent/NaN; cap filled
+  shares at `order.shares` in every branch. Regression suite:
+  `tests/integration/live-fill-ingestion.test.ts` — end-to-end spot-check that
+  ingests six real-shape fill events through `LiveExecutor.checkFill`, replays
+  the exact production PnL math, and asserts the ledger row. Report:
+  `docs/investigations/bug-008-live-fill-overreport.md`.
+
+
 - **Bug #007 — LIVE_V2 bankroll reconciliation race (P0).** `syncLiveBalance`
   overwrote `bankroll.balance` from on-chain USDC on every rollover, racing
   the async `settleOfficial` dispatched by `rolloverSlot`. On-chain
