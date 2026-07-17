@@ -310,8 +310,12 @@ describe("StandingOrderManager — Bug #002 window-open direction lock", () => {
     expect(s.executionCount).toBe(0)
     expect(s.openPositionCount).toBe(0)
 
-    // UP eventually reaches the trigger → the locked UP side fills.
-    h.setPrices(0.92, 0.3)
+    // UP eventually reaches the trigger AND the ask crosses the limit → the
+    // locked UP side fills. Ask must be ≤ limit ($0.90) for a resting BUY at
+    // that limit to match, so we set UP=0.90 (exactly at limit, at/above the
+    // $0.90 trigger). A stale prior expectation used 0.92 which is above the
+    // limit — a non-marketable ask — and could never fill in paper or live.
+    h.setPrices(0.9, 0.3)
     await h.driveTick()
     s = h.snap()!
     expect(s.lockedDirection).toBe("UP")
