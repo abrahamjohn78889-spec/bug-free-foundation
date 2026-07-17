@@ -1103,6 +1103,20 @@ export class StandingOrderManager {
     return Math.round(this.positions.reduce((s, p) => s + p.cost, 0) * 10000) / 10000
   }
 
+  /**
+   * BUG #6 (bankroll reconciliation race): count of lots handed off to
+   * `settleOfficial` whose payout has NOT yet been credited to the bankroll.
+   * The LIVE_V2 balance reconciler must refuse to overwrite `bankroll.balance`
+   * while this is non-zero: if it snapped the ledger to on-chain in that
+   * window it would either double-count a payout (on-chain already reflected
+   * it, ledger about to settle) or lose one (ledger already settled, on-chain
+   * hadn't yet redeemed). Read-only accessor — no side effects.
+   */
+  pendingSettlementCount(): number {
+    return this.pendingSettlementUids.size
+  }
+
+
   /** Configured sizing for Identity D (FIXED_SHARES conformance checks). */
   getConfiguredSizing(): { sizingMode: string; shares: number } | null {
     if (!this.params) return null
