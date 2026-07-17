@@ -363,7 +363,9 @@ describe("hot-path isolation", () => {
 
   it("tick loop keeps completing while an order rests (loop never starves)", async () => {
     const h = makeHarness()
-    h.feed.setPrices(0.5, 0.5) // below trigger — armed, no order
+    // Slight UP lean so Bug A's "decisive majority required" gate still yields
+    // a valid ARMED state (equal 0.50/0.50 is intentionally treated as HOLD).
+    h.feed.setPrices(0.51, 0.49) // below trigger — armed, no order
     h.mgr.arm(0.9, 10, 5, 0.01, 0.99, 0.9, "AT_OR_ABOVE")
     await flush()
     const t1 = h.mgr.getLoopHealth().lastTickCompletedMs
