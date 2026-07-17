@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node build-placeholder.js",
+    "build": "next build",
     "build:dev": "node build-placeholder.js",
     "start": "next start",
     "lint": "eslint .",
