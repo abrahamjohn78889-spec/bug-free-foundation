@@ -210,4 +210,8 @@ export function initNotifier() {
   if (typeof timer.unref === "function") timer.unref()
   globalRef.__botNotifierV2 = { timer }
   logEvent("info", "Operations notifier online (Telegram push, category-gated)", "system")
+
+  // Boot the health monitor alongside the notifier — same lifecycle, same
+  // best-effort guarantees, and the monitor's alerts flow through notify().
+  void import("./health-monitor").then((m) => m.initHealthMonitor()).catch(() => { /* best-effort */ })
 }
