@@ -21,7 +21,19 @@ export interface PlaceOrderRequest {
    * null means GTC — no engine-side expiry timer.
    */
   expireAtMs: number | null
+  /**
+   * Bug #009: whether the LIVE_V2 executor may submit this order as a taker.
+   *  • Default (undefined / true) → post-only maker rest, rejected by CLOB
+   *    if it would cross the spread. Safe for cancel-replace / re-quote flows.
+   *  • false → allow immediate matching. The standing-order pipeline sets this
+   *    when the trigger has fired, because its semantic is "buy at limit price
+   *    now that the ask reached the trigger" — post-only would reject the
+   *    marketable order and the trigger would never fill.
+   * PAPER_V1 ignores this field (paper simulates fills from the live ask).
+   */
+  postOnly?: boolean
 }
+
 
 export interface FillReport {
   order: OpenOrder

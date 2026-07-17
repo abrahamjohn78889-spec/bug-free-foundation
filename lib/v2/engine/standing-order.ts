@@ -1650,10 +1650,18 @@ export class StandingOrderManager {
               phase: "WAITING",
               tif: "GTC",
               expireAtMs: null,
+              // Bug #009: the trigger fires the moment the ask reaches
+              // triggerPrice, so limitPrice (≥ triggerPrice by validation) is
+              // marketable when we submit. LIVE_V2 must NOT post-only this —
+              // CLOB would reject it as "would cross the spread" and no
+              // triggered order would ever fill. Taker acceptance is the
+              // strategy's whole point here.
+              postOnly: false,
             }),
             EXEC_CALL_TIMEOUT_MS,
             "placeOrder",
           )
+
         } catch (e) {
           await this.handlePlacementFailure(side, ids, e)
           return
