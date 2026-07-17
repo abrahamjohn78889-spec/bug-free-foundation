@@ -4,7 +4,24 @@ All notable changes to P4 are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **End-to-end fill reconciliation (Bug #012, PAPER_V1 + LIVE_V2).**
+  CLOB fill events from `/data/trades` now carry `orderIds[]` (populated
+  from `maker_orders[].order_id` + `taker_order_id` on LIVE, and from
+  the simulated resting order's `exchangeOrderId` on PAPER). New
+  `FillReconciler` runs every 60s (15s at startup) and cross-checks CLOB
+  fills against the local `trades` ledger by exchange order id, surfacing
+  four drift classes as read-only findings persisted to `order_log`:
+  `UNBOOKED_FILL` (bug #010 regression signal — missing reversal after
+  failed rollover), `DUPLICATE_BOOKING` (bug #011 guard bypass),
+  `ORPHAN_LEDGER_ROW` (synthesized booking without CLOB match), and
+  `UNATTRIBUTED_FILL` (executor could not attribute the fill).
+  Regression matrix in `tests/integration/bug-012-fill-reconciler.test.ts`.
+
 ### Fixed
+
+
 
 - **Bug #011 — Retried rollover could double-book the ledger (P0 latent, PAPER_V1 + LIVE_V2).**
   `onFill` had no per-order idempotency guard. Any path that reached it twice

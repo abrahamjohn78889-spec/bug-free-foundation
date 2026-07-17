@@ -190,7 +190,11 @@ export class PaperExecutor implements Executor {
       traderSide: "MAKER",
       matchTimeMs: Date.now(),
       txHash: null,
+      // BUG #012 — attribute the simulated fill to its resting exchange
+      // order id so the fill-reconciler can join against the local ledger.
+      orderIds: resting.order.exchangeOrderId ? [resting.order.exchangeOrderId] : [],
     })
+
     // LONG-RUN SAFETY: only the last 25 are ever read (getTradesLive). Cap
     // the buffer so weeks of continuous paper trading can't grow the heap —
     // one fill per 5-min market is ~8,600 entries/month if unbounded.

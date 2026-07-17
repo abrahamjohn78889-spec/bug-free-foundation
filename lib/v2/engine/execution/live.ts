@@ -354,19 +354,38 @@ export class LiveExecutor implements Executor {
   async getRecentTradesLive(): Promise<LiveAccountTrade[]> {
     const rows = await this.client.getTrades(undefined, true)
     if (!Array.isArray(rows)) return []
-    return rows.map((t) => ({
-      id: String(t.id),
-      market: String(t.market ?? ""),
-      assetId: String(t.asset_id ?? ""),
-      outcome: String(t.outcome ?? ""),
-      side: String(t.side ?? ""),
-      price: Number(t.price ?? 0),
-      size: Number(t.size ?? 0),
-      status: String(t.status ?? ""),
-      traderSide: String(t.trader_side ?? ""),
-      matchTimeMs: parseTsMs(t.match_time),
-      txHash: t.transaction_hash ?? null,
-    }))
+    return rows.map((t) => {
+      // BUG #012 — attribute the CLOB fill to the exchange order id(s) that
+      // produced it so the fill-reconciler can join against the local ledger.
+      // Polymarket returns a maker_orders[] array for maker fills plus a
+      // taker_order_id for the aggressor; capture both.
+      const orderIds: string[] = []
+      const makerOrders = (t as { maker_orders?: Array<{ order_id?: string }> }).maker_orders
+      if (Array.isArray(makerOrders)) {
+        for (const m of makerOrders) {
+          if (m && typeof m.order_id === "string" && m.order_id.length > 0) orderIds.push(m.order_id)
+        }
+      }
+      const takerId = (t as { taker_order_id?: string }).taker_order_id
+      if (typeof takerId === "string" && takerId.length > 0 && !orderIds.includes(takerId)) {
+        orderIds.push(takerId)
+      }
+      return {
+        id: String(t.id),
+        market: String(t.market ?? ""),
+        assetId: String(t.asset_id ?? ""),
+        outcome: String(t.outcome ?? ""),
+        side: String(t.side ?? ""),
+        price: Number(t.price ?? 0),
+        size: Number(t.size ?? 0),
+        status: String(t.status ?? ""),
+        traderSide: String(t.trader_side ?? ""),
+        matchTimeMs: parseTsMs(t.match_time),
+        txHash: t.transaction_hash ?? null,
+        orderIds,
+      }
+    })
+
   }
 
   /** Funder/proxy/deposit address the account trades from. */
