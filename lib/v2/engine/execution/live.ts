@@ -195,9 +195,20 @@ export class LiveExecutor implements Executor {
       const o = await this.client.getOrder(order.exchangeOrderId)
       this.fillCheckFailures = 0
       if (!o) return null
-      const matched = Number(o.size_matched ?? 0)
-      const isFullyFilled = o.status === "MATCHED" || matched >= order.shares
-      const isPartialFilled = matched > 0 && matched < order.shares
+      const rawMatched = Number(o.size_matched)
+      const hasMatchedField = Number.isFinite(rawMatched) && rawMatched >= 0
+      const matched = hasMatchedField ? rawMatched : 0
+      // TRUST size_matched OVER status: some exchange states can report
+      // status="MATCHED" while size_matched < order.shares (a cancel+partial-
+      // fill race, or a rebooked order with a stale outer size). Reporting
+      // order.shares in that case OVERSTATES the fill — the ledger books a
+      // cost/payout for shares the account never actually received. Truth
+      // source is size_matched; status is a hint only.
+      const isFullyFilled =
+        (o.status === "MATCHED" && !hasMatchedField) || (hasMatchedField && matched >= order.shares)
+      const isPartialFilled =
+        (hasMatchedField && matched > 0 && matched < order.shares) ||
+        (o.status === "MATCHED" && hasMatchedField && matched > 0 && matched < order.shares)
       if (!isFullyFilled && !isPartialFilled) return null
 
       // PARTIAL-FILL SAFETY: the engine treats any reported fill as terminal
@@ -242,10 +253,17 @@ export class LiveExecutor implements Executor {
       }
 
       // Maker orders fill at their resting limit price; the SDK order record
-      // reports that price. Fall back to the engine's recorded price.
+      // reports that price. Fall back to the engine's recorded price when the
+      // exchange price is missing/zero (never over-invent a fill price).
       const reported = Number(o.price)
       const filledPrice = Number.isFinite(reported) && reported > 0 ? reported : order.price
-      const filledShares = isPartialFilled ? Math.min(finalMatched, order.shares) : order.shares
+      // Never over-report shares: cap at order.shares even on a MATCHED
+      // status with a smaller size_matched (bug #8).
+      const filledShares = isPartialFilled
+        ? Math.min(finalMatched, order.shares)
+        : hasMatchedField
+          ? Math.min(matched, order.shares)
+          : order.shares
       const filledOrder = filledShares !== order.shares ? { ...order, shares: filledShares } : order
       return { order: filledOrder, filledPrice }
     } catch (e) {
