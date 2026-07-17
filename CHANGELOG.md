@@ -4,6 +4,19 @@ All notable changes to P4 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bug #005 — Compounding uses stale bankroll (P0).** `rolloverSlot` dispatches
+  `settleOfficial` asynchronously, so a PERCENT-mode trigger in the new slot
+  could execute before the previous slot's payout was credited, sizing from a
+  stale balance. Fix: track pending-settlement tradeUids and withhold
+  PERCENT sizing (new status `WAITING_SETTLE`) until every prior lot is
+  credited. FIXED_SHARES / FIXED_USD unchanged. Regression tests in
+  `tests/integration/bug-005-compounding-staleness.test.ts`. Report:
+  `docs/investigations/bug-005-position-sizing-compounding.md`.
+
+
+
 ### Investigations
 
 - **Bug #001 — Wrong Prediction Direction / Incorrect Market Side Selection (P0).**
