@@ -260,6 +260,18 @@ export class StandingOrderManager {
    */
   private settledUids = new Set<string>()
 
+  /**
+   * BUG #5 (compounding staleness): rolloverSlot dispatches `settleOfficial`
+   * asynchronously — the new slot's tick can arm/fire BEFORE the previous
+   * slot's payout has been credited to the bankroll. In PERCENT (compounding)
+   * mode that produces a position sized from a stale balance. This set holds
+   * the tradeUids of positions handed off to settlement but not yet credited;
+   * PERCENT sizing refuses to fire while it is non-empty so every compounded
+   * order uses the latest settled balance. FIXED_SHARES / FIXED_USD are
+   * unaffected because their size does not depend on bankroll.
+   */
+  private pendingSettlementUids = new Set<string>()
+
   private slotEndMs = 0
   private strike: number | null = null
   private market: DiscoveredMarket | null = null
