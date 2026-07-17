@@ -396,6 +396,7 @@ export class Edge5Engine {
     getOrderEventListener().setOnAccountEvent(null)
     this.accountSync?.stop()
     this.reconciler.stop()
+    this.fillReconciler.stop()
     stopAccountingVerifier()
     // Close the WebSocket connection for order fill events
     closeOrderEventListener()
