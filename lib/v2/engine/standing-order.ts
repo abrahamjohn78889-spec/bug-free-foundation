@@ -271,6 +271,23 @@ export class StandingOrderManager {
    * unaffected because their size does not depend on bankroll.
    */
   private pendingSettlementUids = new Set<string>()
+  /**
+   * BUG #011 — Duplicate-booking guard for onFill.
+   *   `onFill` opens a ledger row, debits the bankroll, and pushes a lot in a
+   *   single pass with NO idempotency key. Every known caller (pollRestingFill,
+   *   rolloverSlot's final checkFill, submit-time immediate fill) is epoch- or
+   *   restingOrder-guarded, so today only one of them books a given order —
+   *   but the invariant is fragile. A retried rollover, a duplicate checkFill
+   *   ack, or any future caller could double-book (duplicate ledger row PLUS
+   *   double debit) or, symmetrically, leave a stale entry with no matching
+   *   reversal if the resting-order clear happens twice.
+   *   Track every exchangeOrderId we have already booked (per market slot,
+   *   cleared at rollover) and short-circuit any second onFill for the same
+   *   order id. Also gate the rollover final-checkFill so it never books an
+   *   id already booked by pollRestingFill.
+   */
+  private bookedFillOrderIds = new Set<string>()
+
 
   private slotEndMs = 0
   private strike: number | null = null
