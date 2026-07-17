@@ -6,6 +6,20 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #006 — Paper simulator invents partial fills, breaking FIXED_SHARES
+  ledger contract (P0, PAPER_V1 only).** `DEFAULT_CHAOS.partialFillRate` was
+  0.15, so a FIXED_SHARES=7 order would occasionally book as 2 or 3 shares in
+  the paper ledger even though real Polymarket books absorb single-dollar
+  orders fully. Downstream this also distorted PERCENT compounding review.
+  Fix: default `partialFillRate` to 0; chaos remains opt-in via the
+  `PaperExecutor` constructor for adversarial simulations. LIVE_V2 unaffected.
+  Regression tests: `tests/integration/bug-006-paper-partial-fill.test.ts`.
+  Report: `docs/investigations/bug-006-paper-partial-fill.md`.
+
+
+
+### Fixed
+
 - **Bug #005 — Compounding uses stale bankroll (P0).** `rolloverSlot` dispatches
   `settleOfficial` asynchronously, so a PERCENT-mode trigger in the new slot
   could execute before the previous slot's payout was credited, sizing from a
