@@ -1771,6 +1771,25 @@ export class StandingOrderManager {
           "info",
           `Standing limit EXECUTION LATENCY: quote age ${quoteAgeMs}ms | snapshot→decision ${this.lastExecutionLatency.decisionMs}ms | pre-submit ${this.lastExecutionLatency.preSubmitMs}ms | submit→ack ${this.lastExecutionLatency.submitMs}ms | fill-check ${this.lastExecutionLatency.fillCheckMs}ms | total snapshot→ack ${this.lastExecutionLatency.totalMs}ms`,
         )
+        // Persist the latency breakdown for regression tracking (/report page).
+        // Uses queued writes, so this never blocks the execution hot path.
+        try {
+          insertLatencySample({
+            mode: this.deps.getMode(),
+            marketId: ids.marketId,
+            exchangeOrderId: this.restingOrder?.exchangeOrderId ?? immediate?.order.exchangeOrderId ?? null,
+            side,
+            shares,
+            limitPrice,
+            quoteAgeMs: this.lastExecutionLatency.quoteAgeMs,
+            decisionMs: this.lastExecutionLatency.decisionMs,
+            preSubmitMs: this.lastExecutionLatency.preSubmitMs,
+            submitMs: this.lastExecutionLatency.submitMs,
+            fillCheckMs: this.lastExecutionLatency.fillCheckMs,
+            totalMs: this.lastExecutionLatency.totalMs,
+            submitAtMs: this.lastExecutionLatency.atMs,
+          })
+        } catch { /* metrics are best-effort */ }
         // Epoch guard after the fill-check await: on mismatch, do not process
         // the fill here — the reconciler/order-events layer owns recovery.
         if (this.tickEpoch !== myEpoch) return
