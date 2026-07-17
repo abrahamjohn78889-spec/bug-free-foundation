@@ -13,6 +13,28 @@ import type { PipelineMode, SettledTrade, TradeSide } from "./types"
 let db: Database.Database | null = null
 
 /**
+ * Prepared-statement cache. better-sqlite3's `.prepare()` recompiles the SQL
+ * text on every call; hot paths like `updateOpenTradeMark` (per-tick while a
+ * position is open) and `kvGet`/`kvSet` (called via Bankroll on every access)
+ * benefit meaningfully from statement reuse. Keyed by (db, sql). The cache is
+ * invalidated automatically when the db handle is replaced (tests).
+ */
+const stmtCaches = new WeakMap<Database.Database, Map<string, Database.Statement>>()
+function prep(d: Database.Database, sql: string): Database.Statement {
+  let cache = stmtCaches.get(d)
+  if (!cache) {
+    cache = new Map()
+    stmtCaches.set(d, cache)
+  }
+  let stmt = cache.get(sql)
+  if (!stmt) {
+    stmt = d.prepare(sql)
+    cache.set(sql, stmt)
+  }
+  return stmt
+}
+
+/**
  * Queue for database writes to prevent blocking the execution engine.
  * All writes are asynchronously queued and executed in order.
  */
