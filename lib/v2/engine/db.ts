@@ -280,12 +280,11 @@ export function insertTrade(t: {
   explanation?: string | null
 }): void {
   queueWrite(() => {
-    getDb()
-      .prepare(
-        `INSERT INTO trades (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode, status, explanation)
+    prep(
+      getDb(),
+      `INSERT INTO trades (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode, status, explanation)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETTLED', ?)`,
-      )
-      .run(t.marketId, t.slotEndMs, t.side, t.price, t.shares, t.cost, t.result, t.pnl, t.balanceAfter, t.dustSaved, t.mode, t.explanation ?? null)
+    ).run(t.marketId, t.slotEndMs, t.side, t.price, t.shares, t.cost, t.result, t.pnl, t.balanceAfter, t.dustSaved, t.mode, t.explanation ?? null)
   })
 }
 
