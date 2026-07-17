@@ -86,6 +86,8 @@ interface RestingOrder {
   /** checkFill must report a given fill exactly once — a second call
    *  re-reporting the same shares would double-book the trade upstream. */
   fillReported: boolean
+  /** Share-weighted average fill price across partial matches (Bug #013). */
+  filledNotional: number
 }
 
 function sleep(ms: number): Promise<void> {
@@ -176,7 +178,17 @@ export class PaperExecutor implements Executor {
     resting.matched += fillShares
     if (resting.matched >= resting.order.shares) resting.status = "MATCHED"
 
-    const cost = fillShares * resting.order.price
+    // BUG #013 — Taker realism: when a marketable LIMIT BUY (limit > best
+    // ask) crosses into resting sell offers, the CLOB fills at the RESTING
+    // ASK, not the taker's limit. Paying `resting.order.price` on every
+    // fill made paper systematically over-pay vs. live by (limit - ask) —
+    // e.g. a $0.99 limit against a $0.85 ask booked cost $4.95 instead of
+    // $4.25 (+16% cost, worse WIN payout math). Fill price is now the
+    // better of {limit, live ask} — matches maker-fills-at-limit for
+    // non-marketable orders and taker-fills-at-ask for marketable ones.
+    const fillPrice = Math.min(resting.order.price, liveAsk)
+    const cost = fillShares * fillPrice
+    resting.filledNotional += cost
     this.walletUsd -= cost
     this.trades.push({
       id: randomUUID(),
@@ -184,7 +196,7 @@ export class PaperExecutor implements Executor {
       assetId: resting.order.tokenId,
       outcome: resting.order.side,
       side: "BUY",
-      price: resting.order.price,
+      price: fillPrice,
       size: fillShares,
       status: "CONFIRMED",
       traderSide: "MAKER",
@@ -201,7 +213,7 @@ export class PaperExecutor implements Executor {
     if (this.trades.length > 200) this.trades.splice(0, this.trades.length - 200)
     logEvent(
       "trade",
-      `[SIM] fill: ${fillShares}/${resting.order.shares} ${resting.order.side} @ $${resting.order.price.toFixed(2)} (live ask $${liveAsk.toFixed(2)} crossed limit)${isPartial ? " — PARTIAL" : ""}`,
+      `[SIM] fill: ${fillShares}/${resting.order.shares} ${resting.order.side} @ $${fillPrice.toFixed(4)} (limit $${resting.order.price.toFixed(2)}, live ask $${liveAsk.toFixed(2)})${isPartial ? " — PARTIAL" : ""}`,
     )
   }
 
@@ -263,6 +275,7 @@ export class PaperExecutor implements Executor {
       expireAtMs: req.expireAtMs,
       createdAtMs: Date.now(),
       fillReported: false,
+      filledNotional: 0,
     })
     logEvent("info", `[SIM] Maker order live: ${req.side} ${size} @ $${price.toFixed(2)} (id ${exchangeOrderId.slice(0, 12)}...)`)
     return order
@@ -313,7 +326,11 @@ export class PaperExecutor implements Executor {
     }
     const filledShares = matched
     const filledOrder = filledShares !== order.shares ? { ...order, shares: filledShares } : order
-    return { order: filledOrder, filledPrice: order.price }
+    // Bug #013 — report the SHARE-WEIGHTED AVG fill price actually paid,
+    // not the outer limit. Falls back to limit only if notional never
+    // accumulated (defensive; shouldn't happen when matched > 0).
+    const avgPrice = resting.filledNotional > 0 && matched > 0 ? resting.filledNotional / matched : order.price
+    return { order: filledOrder, filledPrice: avgPrice }
   }
 
   async getOrderState(order: OpenOrder): Promise<OrderState> {
