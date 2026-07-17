@@ -652,13 +652,17 @@ export interface AuditRow {
   message: string
 }
 
-/** Append an audit entry. Must never crash any caller. */
+/** Append an audit entry. Must never crash any caller — writes are queued
+ *  off the trading loop so warn/error events never fsync-block the caller. */
 export function insertAuditLog(level: string, category: string, message: string) {
-  try {
-    getDb().prepare(`INSERT INTO audit_log (ts_ms, level, category, message) VALUES (?, ?, ?, ?)`).run(Date.now(), level, category, message)
-  } catch {
-    /* audit persistence is best-effort */
-  }
+  const ts = Date.now()
+  queueWrite(() => {
+    try {
+      prep(getDb(), `INSERT INTO audit_log (ts_ms, level, category, message) VALUES (?, ?, ?, ?)`).run(ts, level, category, message)
+    } catch {
+      /* audit persistence is best-effort */
+    }
+  })
 }
 
 /** Filter + full-text search over the audit log (newest first). */
