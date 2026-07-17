@@ -361,6 +361,7 @@ export class Edge5Engine {
       // Exchange-truth reconciler: read-only 60s cross-check of open orders
       // and wallet vs the engine's local view. Flags untracked live orders.
       this.reconciler.start()
+      this.fillReconciler.start()
       // Continuous accounting verifier (Phase 5): pure-math ledger identities
       // (per-trade PnL, balance chain, bankroll agreement, sizing conformance)
       // every 5 minutes in BOTH modes. Report-only except bankroll re-stamp.
