@@ -274,6 +274,7 @@ export class PaperExecutor implements Executor {
       expireAtMs: req.expireAtMs,
       createdAtMs: Date.now(),
       fillReported: false,
+      filledNotional: 0,
     })
     logEvent("info", `[SIM] Maker order live: ${req.side} ${size} @ $${price.toFixed(2)} (id ${exchangeOrderId.slice(0, 12)}...)`)
     return order
