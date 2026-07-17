@@ -187,3 +187,6 @@ All notable changes to P4 are documented here.
   window-open the engine HOLDs (`NO_DATA`) instead of guessing. Applies to
   both PAPER_V1 and LIVE_V2. Regression tests added in
   `tests/integration/standing-order.test.ts`.
+
+## Bug #012 wiring — FillReconciler installed in engine lifecycle
+- `lib/v2/engine/engine.ts`: instantiate `FillReconciler` alongside `Reconciler`; `start()`/`stop()` mirror the existing reconciler wiring. Closes the "not yet installed in engine.ts" follow-up called out in `docs/investigations/bug-012-fill-reconciler.md`.

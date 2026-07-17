@@ -26,6 +26,7 @@ import { validateOrderSize } from "./handlers/protocol-validator"
 import { buildOrphanCounter, detectOrphan } from "./handlers/orphan-cleaner"
 import { allDefaultParams, defaultParamsFor, getStrategy, isStrategyId } from "./strategy-registry/registry"
 import { Reconciler } from "./reconciler"
+import { FillReconciler } from "./fill-reconciler"
 import { startAccountingVerifier, stopAccountingVerifier, getLastAccountingAudit } from "./accounting-verifier"
 import { stopSettlementVerifier } from "./settlement-verifier"
 import { RiskManager, type RiskLimits } from "./risk"
@@ -140,6 +141,15 @@ export class Edge5Engine {
     // Both pipelines reconcile against their execution backend's account
     // mirror (real exchange in LIVE_V2, simulated exchange in PAPER_V1).
     isLive: () => true,
+    isRunning: () => this.running,
+  })
+
+  /** Read-only end-to-end CLOB fill ↔ ledger cross-check (60s cadence).
+   *  Surfaces UNBOOKED / UNATTRIBUTED / DUPLICATE / ORPHAN drift as
+   *  order_log ERROR entries. Never mutates orders or ledger rows. */
+  private fillReconciler = new FillReconciler({
+    getExecutor: () => this.executor,
+    getMode: () => this.mode,
     isRunning: () => this.running,
   })
 
@@ -351,6 +361,7 @@ export class Edge5Engine {
       // Exchange-truth reconciler: read-only 60s cross-check of open orders
       // and wallet vs the engine's local view. Flags untracked live orders.
       this.reconciler.start()
+      this.fillReconciler.start()
       // Continuous accounting verifier (Phase 5): pure-math ledger identities
       // (per-trade PnL, balance chain, bankroll agreement, sizing conformance)
       // every 5 minutes in BOTH modes. Report-only except bankroll re-stamp.
@@ -385,6 +396,7 @@ export class Edge5Engine {
     getOrderEventListener().setOnAccountEvent(null)
     this.accountSync?.stop()
     this.reconciler.stop()
+    this.fillReconciler.stop()
     stopAccountingVerifier()
     // Close the WebSocket connection for order fill events
     closeOrderEventListener()
