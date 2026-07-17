@@ -155,6 +155,30 @@ function getDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts_ms);
     CREATE INDEX IF NOT EXISTS idx_audit_cat_ts ON audit_log(category, ts_ms);
+    -- Persistent execution-latency samples: one row per submitted standing
+    -- limit order. Publish (submit start) → ack → observed fill. Used by the
+    -- /report page to track latency regressions across restarts.
+    CREATE TABLE IF NOT EXISTS latency_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts_ms INTEGER NOT NULL,
+      mode TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      exchange_order_id TEXT,
+      side TEXT,
+      shares INTEGER,
+      limit_price REAL,
+      quote_age_ms INTEGER NOT NULL,
+      decision_ms INTEGER NOT NULL,
+      pre_submit_ms INTEGER NOT NULL,
+      submit_ms INTEGER NOT NULL,
+      fill_check_ms INTEGER NOT NULL,
+      total_ms INTEGER NOT NULL,
+      submit_at_ms INTEGER NOT NULL,
+      fill_observed_ms INTEGER,
+      filled_price REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_latency_mode_ts ON latency_samples(mode, ts_ms);
+    CREATE INDEX IF NOT EXISTS idx_latency_order ON latency_samples(exchange_order_id);
   `)
 
   // ---- Lifecycle migration: open→settled columns (idempotent) ----
