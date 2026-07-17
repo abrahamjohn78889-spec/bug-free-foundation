@@ -188,6 +188,7 @@ export class PaperExecutor implements Executor {
     // non-marketable orders and taker-fills-at-ask for marketable ones.
     const fillPrice = Math.min(resting.order.price, liveAsk)
     const cost = fillShares * fillPrice
+    resting.filledNotional += cost
     this.walletUsd -= cost
     this.trades.push({
       id: randomUUID(),
