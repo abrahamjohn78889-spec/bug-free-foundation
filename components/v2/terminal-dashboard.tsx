@@ -229,6 +229,17 @@ export function TerminalDashboard({ pipeline }: { pipeline: PipelineMode }) {
           </div>
         </>
       )}
-    </main>
+      </main>
+    </div>
   )
 }
+
+function StatusChip({ label, ok, okText, offText }: { label: string; ok: boolean; okText: string; offText: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{label}</span>
+      <span className={ok ? "text-neon" : "text-muted-foreground/70"}>{ok ? okText : offText}</span>
+    </span>
+  )
+}
+
