@@ -260,6 +260,18 @@ export class StandingOrderManager {
    */
   private settledUids = new Set<string>()
 
+  /**
+   * BUG #5 (compounding staleness): rolloverSlot dispatches `settleOfficial`
+   * asynchronously — the new slot's tick can arm/fire BEFORE the previous
+   * slot's payout has been credited to the bankroll. In PERCENT (compounding)
+   * mode that produces a position sized from a stale balance. This set holds
+   * the tradeUids of positions handed off to settlement but not yet credited;
+   * PERCENT sizing refuses to fire while it is non-empty so every compounded
+   * order uses the latest settled balance. FIXED_SHARES / FIXED_USD are
+   * unaffected because their size does not depend on bankroll.
+   */
+  private pendingSettlementUids = new Set<string>()
+
   private slotEndMs = 0
   private strike: number | null = null
   private market: DiscoveredMarket | null = null
@@ -1466,6 +1478,28 @@ export class StandingOrderManager {
           return
         }
 
+        // BUG #5 (compounding staleness gate): in PERCENT mode the next order's
+        // size depends on the pool. If the previous slot's payout has not yet
+        // been credited (settleOfficial runs asynchronously after rollover),
+        // sizing here would use a stale balance and break continuous
+        // compounding. Withhold until every pending lot is settled.
+        if (
+          this.params.sizingMode === "PERCENT" &&
+          this.pendingSettlementUids.size > 0
+        ) {
+          this.status = "WAITING_SETTLE"
+          this.throttledLog(
+            `settle-pending-${this.slotEndMs}`,
+            "info",
+            `Standing limit held: PERCENT compounding is waiting for ${this.pendingSettlementUids.size} prior lot(s) to settle so the next order sizes from the freshly-compounded balance`,
+          )
+          this.logWithheld(
+            "compound-pending-settlement",
+            `trigger crossed but ${this.pendingSettlementUids.size} prior lot(s) awaiting settlement — PERCENT compounding refuses to size from a stale balance`,
+          )
+          return
+        }
+
         // AUTOMATIC COMPOUNDING — size the order NOW, from the CURRENT
         // ledger-authoritative bankroll. In PERCENT mode every prior
         // settlement has already updated the pool, so this order compounds
@@ -2103,6 +2137,9 @@ export class StandingOrderManager {
       // background and would otherwise read a null strike. The fallback is a
       // last resort only; the official outcome is always preferred.
       const fallback = this.computeSpotFallback()
+      // BUG #5: mark these lots pending so PERCENT compounding in the NEW slot
+      // cannot size from a stale bankroll before settleOfficial credits payout.
+      for (const p of positions) this.pendingSettlementUids.add(p.tradeUid)
       void this.settleOfficial(positions, fallback)
     }
 
@@ -2300,6 +2337,10 @@ export class StandingOrderManager {
    * tradeUid so the early-resolution and rollover paths can't double-settle.
    */
   private recordSettlement(pos: FilledLot, winner: TradeSide | null, source: string) {
+    // BUG #5: this lot has reached settlement (or is being suppressed as a
+    // duplicate because another path already credited it) — either way it no
+    // longer blocks PERCENT compounding in subsequent slots.
+    this.pendingSettlementUids.delete(pos.tradeUid)
     if (this.settledUids.has(pos.tradeUid)) {
       logEvent("warn", `[settlement] duplicate settle suppressed for ${pos.tradeUid} (${pos.marketId})`)
       return
