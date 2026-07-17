@@ -31,10 +31,11 @@
 // cycle. Findings persist to `order_log` so they show up in audit exports.
 // ============================================================================
 
-import { insertOrderLog, recentTrades, type SettledTrade } from "./db"
+import { insertOrderLog, recentTrades } from "./db"
 import { logEvent } from "./events"
 import type { Executor } from "./execution/executor"
-import type { LiveAccountTrade, PipelineMode } from "./types"
+import type { LiveAccountTrade, PipelineMode, SettledTrade } from "./types"
+
 
 const RECONCILE_MS = 60_000
 /** Only cross-check ledger rows opened within this window. Older rows are
