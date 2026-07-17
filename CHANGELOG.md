@@ -6,6 +6,19 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #010 — Short-window fill loss at rollover (P0, PAPER_V1 + LIVE_V2).**
+  With a short entry time window (5s / 15s / 30s / 45s) the trigger can fire
+  in the final few hundred ms of a slot. `rolloverSlot()` cancelled the
+  resting order at the slot boundary without a final `checkFill`, so any
+  match that landed between the last tick's poll and the boundary was
+  silently discarded — LIVE_V2 owned the shares on-chain with no ledger row,
+  PAPER_V1 dropped the fill entirely. Fix: `rolloverSlot()` now runs one
+  epoch-safe `checkFill` before cancelling and books any reported fill via
+  the normal `onFill` path (idempotent in both executors). Report:
+  `docs/investigations/bug-010-short-window-rollover-fill-loss.md`.
+  Regression: `tests/integration/bug-010-rollover-fill-check.test.ts`.
+
+
 - **Bug #009 — LIVE_V2 rejects every standing-order trigger fire (P0, LIVE_V2
   only).** `live.ts` hard-coded `POST_ONLY = true`, but the standing-order
   design fires the trigger the moment the ask reaches `triggerPrice` and
