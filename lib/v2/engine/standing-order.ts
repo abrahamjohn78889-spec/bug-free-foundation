@@ -2315,6 +2315,10 @@ export class StandingOrderManager {
    * tradeUid so the early-resolution and rollover paths can't double-settle.
    */
   private recordSettlement(pos: FilledLot, winner: TradeSide | null, source: string) {
+    // BUG #5: this lot has reached settlement (or is being suppressed as a
+    // duplicate because another path already credited it) — either way it no
+    // longer blocks PERCENT compounding in subsequent slots.
+    this.pendingSettlementUids.delete(pos.tradeUid)
     if (this.settledUids.has(pos.tradeUid)) {
       logEvent("warn", `[settlement] duplicate settle suppressed for ${pos.tradeUid} (${pos.marketId})`)
       return
