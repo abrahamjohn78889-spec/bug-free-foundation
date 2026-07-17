@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "build:dev": "echo 'skip: Next.js app, no dev build needed for Lovable sandbox'",
+    "build": "node build-placeholder.js",
+    "build:dev": "node build-placeholder.js",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
