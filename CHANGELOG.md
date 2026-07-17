@@ -27,6 +27,18 @@ All notable changes to P4 are documented here.
   settlement. **Verdict: no defect — the pipeline matches the strategy spec
   after Bug #001/#002 fixes.** Added regression tests locking the behaviour.
   Report: `docs/investigations/bug-003-standing-order.md`.
+- **Bug #004 — Fill Handling, Settlement, Ledger & PnL Correctness (P0).**
+  Traced `Executor fill → onFill (debit + OPEN ledger row + partial-fill audit)
+  → resolveSlot → recordSettlement (settledUids + DB-idempotent settleTrade
+  + gated bankroll.settle + accounting invariant + wallet mirror + audited
+  order_log)` in both PAPER_V1 and LIVE_V2. Confirmed WIN/LOSS/SCRATCH
+  classification, PnL = payout − cost, one-and-only-one settlement per fill,
+  strict SCRATCH-on-unverified-data, orphan-refund on restart, and
+  post-settlement auto-repair. **Verdict: no defect — pipeline correct and
+  already covered by existing regression suites (mapped in the report).**
+  Report: `docs/investigations/bug-004-fill-settlement-pnl.md`.
+
+
 
 
 ### Fixed
