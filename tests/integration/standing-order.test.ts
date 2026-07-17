@@ -187,7 +187,10 @@ describe("StandingOrderManager — BTC-reference majority trigger + direction lo
 
     let s = h.snap()!
     expect(s.majoritySide).toBe("UP")
-    expect(s.lockedDirection).toBeNull()
+    // Bug #002 fix: majority side is LOCKED at the first eligible tick
+    // (window-open lock), not at trigger fire. So DOWN=0.92 hitting the
+    // trigger while UP is the BTC-reference majority must not lock DOWN.
+    expect(s.lockedDirection).toBe("UP")
     expect(s.executionCount).toBe(0)
     expect(s.openPositionCount).toBe(0)
 
