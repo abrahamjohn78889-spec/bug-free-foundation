@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "bun run serve.js",
-    "build": "echo skipped",
-    "build:dev": "echo skipped",
-    "start": "echo skipped",
+    "build": "bun run build-placeholder.js",
+    "build:dev": "bun run build-placeholder.js",
+    "dist-check": "bun run build-placeholder.js",
+    "start": "bun run serve.js",
     "lint": "echo skipped",
     "test": "echo skipped"
   }
