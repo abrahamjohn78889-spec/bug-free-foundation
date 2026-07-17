@@ -70,13 +70,15 @@ describe("PaperExecutor — order lifecycle (deterministic)", () => {
     expect(await ex.getOrderState(order)).toBe("MATCHED")
   })
 
-  it("debits the simulated wallet on fill", async () => {
+  it("debits the simulated wallet on fill (at min(limit, live ask) per Bug #013)", async () => {
     const before = await ex.getAvailableBalanceUsd()
     const order = await ex.placeOrder(req({ price: 0.4, shares: 10 }))
     asks.set(0.35)
     await ex.checkFill(order)
     const after = await ex.getAvailableBalanceUsd()
-    expect(before! - after!).toBeCloseTo(4, 2) // 10 × $0.40
+    // Bug #013: marketable BUY fills at the resting ask ($0.35), not at the
+    // taker's $0.40 limit. Debit is therefore 10 × $0.35 = $3.50, not $4.00.
+    expect(before! - after!).toBeCloseTo(3.5, 2)
   })
 
   it("never fills while the live feed is stale (null ask)", async () => {

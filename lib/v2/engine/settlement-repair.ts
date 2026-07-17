@@ -152,7 +152,14 @@ export function repairTrade(
   const repairedSettlementText = won
     ? `WIN — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); each share paid out $1.00 (auto-repaired)`
     : `LOSS — bet ${trade.side}, official winner ${officialWinner} (source: settlement-repair); shares expired worthless (auto-repaired)`
-  const repairedPnlCalcText = `payout $${expected.payout.toFixed(4)} − cost $${trade.cost.toFixed(4)} = ${expected.pnl >= 0 ? "+" : ""}$${expected.pnl.toFixed(4)} (auto-repaired)`
+  // BUG #004b — signed PnL formatting: `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}`
+  // produced "$-11.0000" (dollar-then-minus), which failed the ledger's
+  // "-$11.0000" convention and any UI regex expecting the minus BEFORE the
+  // currency sign. Format sign OUTSIDE the currency symbol so negative repairs
+  // render as "-$11.0000" and positives as "+$9.0000".
+  const pnlAbs = Math.abs(expected.pnl).toFixed(4)
+  const pnlSigned = expected.pnl >= 0 ? `+$${pnlAbs}` : `-$${pnlAbs}`
+  const repairedPnlCalcText = `payout $${expected.payout.toFixed(4)} − cost $${trade.cost.toFixed(4)} = ${pnlSigned} (auto-repaired)`
   const repairBlock = {
     settlement: repairedSettlementText,
     pnlCalc: repairedPnlCalcText,

@@ -967,10 +967,15 @@ export class StandingOrderManager {
     if (!snap) return { side: null, price: 0 }
     let side = this.btcReferenceDirection()
     if (!side && this.strike !== null && this.freshSpotPrice() !== null) {
-      // Exact BTC tie versus strike: there is no directional move, so fall back
-      // to the market's own higher-priced contract. Missing/stale BTC still
-      // returns null above and HOLDs.
-      side = snap.up.price >= snap.down.price ? "UP" : "DOWN"
+      // BUG-A FIX (direction-lock regression): exact BTC tie versus strike
+      // used to fall back to `up.price >= down.price`, but the `>=` picked UP
+      // whenever prices were ambiguous (e.g. 0.50/0.50 at arm-time, before any
+      // real market movement). That produced a spurious window-open lock on
+      // UP even when BTC subsequently moved decisively below strike. Only
+      // fall back to CLOB when the two contracts have a genuine, decisive
+      // price separation — otherwise stay null and HOLD until the next tick.
+      if (snap.up.price > snap.down.price) side = "UP"
+      else if (snap.down.price > snap.up.price) side = "DOWN"
     }
     if (!side) return { side: null, price: 0 }
     return { side, price: side === "UP" ? snap.up.price : snap.down.price }

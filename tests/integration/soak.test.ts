@@ -10,6 +10,7 @@ import {
   auditCategories,
   backupDatabase,
   dbStats,
+  flushWriteQueueSync,
   insertAuditLog,
   integrityCheck,
   pruneAuditLog,
@@ -237,6 +238,9 @@ describe("soak: database growth and maintenance", () => {
   it("insertAuditLog never throws even under concurrent write pressure", () => {
     // Rapid-fire writes (WAL handles concurrency; busy_timeout guards the rest).
     for (let i = 0; i < 500; i++) insertAuditLog("info", "system", `pressure ${i}`)
+    // insertAuditLog is queued off the trading loop (never blocks callers), so
+    // flush the write queue before asserting the rows are visible.
+    flushWriteQueueSync()
     expect(queryAuditLog({ search: "pressure", limit: 10 }).length).toBe(10)
   })
 })

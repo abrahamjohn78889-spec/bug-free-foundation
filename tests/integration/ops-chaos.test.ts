@@ -149,16 +149,18 @@ describe("analytics under degenerate ledgers", () => {
 
 describe("audit log under hostile inputs", () => {
   it("SQL-injection-shaped search terms are treated as literals", async () => {
-    const { insertAuditLog, queryAuditLog } = await import("@/lib/v2/engine/db")
+    const { insertAuditLog, queryAuditLog, flushWriteQueueSync } = await import("@/lib/v2/engine/db")
     insertAuditLog("info", "system", "benign row")
+    flushWriteQueueSync()
     const hostile = queryAuditLog({ search: "'; DROP TABLE audit_log; --" })
     expect(hostile.length).toBe(0) // no match — and the table survived:
     expect(queryAuditLog({}).length).toBe(1)
   })
 
   it("absurd limits are clamped instead of honored", async () => {
-    const { insertAuditLog, queryAuditLog } = await import("@/lib/v2/engine/db")
+    const { insertAuditLog, queryAuditLog, flushWriteQueueSync } = await import("@/lib/v2/engine/db")
     for (let i = 0; i < 10; i++) insertAuditLog("info", "system", `row ${i}`)
+    flushWriteQueueSync()
     expect(queryAuditLog({ limit: 999_999 }).length).toBe(10)
     expect(queryAuditLog({ limit: -5 }).length).toBe(1) // clamped to 1
   })
