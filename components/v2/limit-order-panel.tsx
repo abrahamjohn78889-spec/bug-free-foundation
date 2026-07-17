@@ -26,6 +26,7 @@ const STATUS_DISPLAY: Record<StandingOrderStatus, { label: string; className: st
   BLOCKED: { label: "BLOCKED — RISK GATE", className: "text-destructive bg-destructive/10", pulse: true },
   WINDOW_WAITING: { label: "AWAITING ENTRY WINDOW", className: "text-caution bg-caution/10", pulse: true },
   WINDOW_EXPIRED: { label: "SETTLED — RE-ARMING", className: "text-caution bg-caution/10" },
+  WAITING_SETTLE: { label: "WAITING SETTLE", className: "text-caution bg-caution/10", pulse: true },
 }
 
 /** Final entry window choices (seconds before settlement); 0 = disabled. Mirrors SLO_WINDOW_OPTIONS_SEC. */

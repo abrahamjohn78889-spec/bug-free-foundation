@@ -450,7 +450,7 @@ export class StandingOrderManager {
       // resting order is cancelled best-effort (its market has expired).
       const rt = saved.runtime
       if (rt && rt.slotEndMs === this.slotEndMs) {
-        this.strike = Number.isFinite(rt.strike) ? rt.strike : null
+        this.strike = typeof rt.strike === "number" && Number.isFinite(rt.strike) ? rt.strike : null
         this.lockedDirection = rt.lockedDirection ?? null
         // NOTE: the trigger lock's generation is NOT restored across restarts —
         // the feed's generation counter restarts with the process, so a stale
