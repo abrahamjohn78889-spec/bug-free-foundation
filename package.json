@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:dev": "echo 'skip: Next.js app, no dev build needed for Lovable sandbox'",
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
