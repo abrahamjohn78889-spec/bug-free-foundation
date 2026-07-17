@@ -2009,6 +2009,36 @@ export class StandingOrderManager {
   }
 
   private onFill(order: OpenOrder, filledPrice: number) {
+    // BUG #011 — refuse duplicate bookings for the same exchange order id.
+    // Two callers arriving at the same order (poll + rollover retry, retried
+    // rollover, exchange re-ack) MUST NOT produce two ledger rows and two
+    // bankroll debits. First writer wins; every subsequent call is a no-op.
+    const oid = order.exchangeOrderId
+    if (oid && this.bookedFillOrderIds.has(oid)) {
+      insertOrderLog({
+        mode: this.deps.getMode(),
+        event: "FILLED",
+        marketId: order.marketId,
+        tokenId: order.tokenId,
+        exchangeOrderId: oid,
+        side: order.side,
+        price: filledPrice,
+        shares: order.shares,
+        phase: "WAITING",
+        detail: "duplicate onFill suppressed (bug #011 idempotency guard)",
+      })
+      // Clear any lingering resting pointer to the same order — the ledger
+      // already owns this fill; leaving restingOrder set would risk another
+      // cancel/checkFill round-trip against a completed order.
+      if (this.restingOrder?.exchangeOrderId === oid) {
+        this.restingOrder = null
+        this.restingSide = null
+      }
+      return
+    }
+    if (oid) this.bookedFillOrderIds.add(oid)
+
+
     const cost = Math.round(order.shares * filledPrice * 10000) / 10000
     const bankroll = this.deps.getBankroll()
     bankroll.debitFixed(cost)
