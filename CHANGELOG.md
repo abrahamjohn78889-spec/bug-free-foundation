@@ -4,7 +4,23 @@ All notable changes to P4 are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Order submission retry & idempotency across WS reconnects (Bug #014,
+  PAPER_V1 + LIVE_V2).** `handlePlacementFailure` now actively retries
+  transient placement failures (timeout / network / WS reconnect / 5xx)
+  up to 3 attempts with 0.5s/1.5s/3s backoff, re-scanning for adoption
+  before every retry so a lost-ack order is adopted (never duplicated).
+  Terminal errors (reject / insufficient / invalid tick / unauthorized)
+  stand down immediately. Unverifiable exchange state still refuses to
+  blind-retry and re-arms with a 60s cooldown for the reconciler to
+  cross-check. Full details in
+  `docs/investigations/bug-014-submission-retry-idempotency.md`;
+  regression suite in
+  `tests/integration/bug-014-submission-retry-idempotency.test.ts`.
+
 ### Added
+
 
 - **End-to-end fill reconciliation (Bug #012, PAPER_V1 + LIVE_V2).**
   CLOB fill events from `/data/trades` now carry `orderIds[]` (populated

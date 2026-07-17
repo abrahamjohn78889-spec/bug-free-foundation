@@ -5,7 +5,7 @@ import { logEvent } from "./events"
 import { notify } from "./notifier"
 import { startSettlementVerifier, verifySettlements } from "./settlement-verifier"
 import { PaperExecutor } from "./execution/paper"
-import type { Executor } from "./execution/executor"
+import type { Executor, PlaceOrderRequest } from "./execution/executor"
 import type { MarketDiscovery, DiscoveredMarket } from "./feeds/market-discovery"
 import type { ClobPriceFeed, FeedSnapshot } from "./feeds/clob-price-feed"
 import type { BtcReferenceFeed } from "./feeds/btc-reference-feed"
@@ -1653,35 +1653,42 @@ export class StandingOrderManager {
         // ---- LATENCY (stage 2): decision → placeOrder start ----
         const submitStartMs = Date.now()
         let placedOrder: OpenOrder
+        const placeReq: PlaceOrderRequest = {
+          marketId: ids.marketId,
+          tokenId: ids.tokenId,
+          side,
+          price: limitPrice,
+          shares,
+          phase: "WAITING",
+          tif: "GTC",
+          expireAtMs: null,
+          // Bug #009: the trigger fires the moment the ask reaches
+          // triggerPrice, so limitPrice (≥ triggerPrice by validation) is
+          // marketable when we submit. LIVE_V2 must NOT post-only this —
+          // CLOB would reject it as "would cross the spread" and no
+          // triggered order would ever fill. Taker acceptance is the
+          // strategy's whole point here.
+          postOnly: false,
+        }
         try {
           // Timeout-bounded: a hung placement resolves as an AMBIGUOUS failure
           // (handled below with exchange-state verification + adoption), never
           // as a permanently wedged tick.
           placedOrder = await withTimeout(
-            this.executor.placeOrder({
-              marketId: ids.marketId,
-              tokenId: ids.tokenId,
-              side,
-              price: limitPrice,
-              shares,
-              phase: "WAITING",
-              tif: "GTC",
-              expireAtMs: null,
-              // Bug #009: the trigger fires the moment the ask reaches
-              // triggerPrice, so limitPrice (≥ triggerPrice by validation) is
-              // marketable when we submit. LIVE_V2 must NOT post-only this —
-              // CLOB would reject it as "would cross the spread" and no
-              // triggered order would ever fill. Taker acceptance is the
-              // strategy's whole point here.
-              postOnly: false,
-            }),
+            this.executor.placeOrder(placeReq),
             EXEC_CALL_TIMEOUT_MS,
             "placeOrder",
           )
-
         } catch (e) {
-          await this.handlePlacementFailure(side, ids, e)
-          return
+          // BUG #014 — WS-reconnect / transient submission failure hardening.
+          // handlePlacementFailure now: (1) scans for adoption, (2) actively
+          // retries transient failures with backoff, (3) only re-arms the
+          // trigger when the order is confirmably absent AND retries are
+          // exhausted or the error is terminal. On successful adoption or
+          // retry it sets restingOrder/status=RESTING and returns the order.
+          const recovered = await this.handlePlacementFailure(side, ids, e, placeReq, myEpoch)
+          if (!recovered) return
+          placedOrder = recovered
         }
         // ---- LATENCY (stage 3): exchange ack received ----
         const ackMs = Date.now()
@@ -1860,16 +1867,34 @@ export class StandingOrderManager {
 
   /**
    * A placeOrder call threw. The order may or may not have been accepted
-   * (e.g. a response timeout AFTER exchange acceptance), so:
+   * (e.g. a response timeout AFTER exchange acceptance, or a CLOB WS
+   * reconnect flushing the in-flight request), so:
    *   1. UNKNOWN-STATE PROTECTION: scan the account's live open orders for a
    *      match (same token, side, ~same price) and ADOPT it instead of
    *      re-placing — a blind retry would create a duplicate live order.
-   *   2. Only when confirmably absent, re-open the trigger gate with a retry
-   *      cooldown so the window is never silently dead after one bad call.
+   *   2. Only when confirmably absent, ACTIVELY RETRY the placement with
+   *      exponential backoff for transient errors (timeout/network/ws
+   *      reconnect/5xx). Between each retry we re-scan for adoption so a
+   *      slow-ack that landed on the exchange while we backed off can never
+   *      turn into a duplicate.
+   *   3. Only when retries are exhausted (or the error is terminal) do we
+   *      re-open the trigger gate with a cooldown so the window is never
+   *      silently dead after one bad call.
+   *
+   * Returns the OpenOrder to adopt when placement ultimately succeeded (via
+   * adoption OR retry). Returns null when the caller must abort this tick
+   * (either because we re-armed for a fresh crossing, or the error was
+   * terminal and the window will stand down).
    */
-  private async handlePlacementFailure(side: TradeSide, ids: { marketId: string; tokenId: string }, e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-    logEvent("error", `Standing limit placement FAILED: ${msg} — verifying exchange state before any retry`)
+  private async handlePlacementFailure(
+    side: TradeSide,
+    ids: { marketId: string; tokenId: string },
+    firstError: unknown,
+    placeReq: PlaceOrderRequest,
+    myEpoch: number,
+  ): Promise<OpenOrder | null> {
+    const firstMsg = firstError instanceof Error ? firstError.message : String(firstError)
+    logEvent("error", `Standing limit placement FAILED: ${firstMsg} — verifying exchange state before any retry`)
     insertOrderLog({
       mode: this.deps.getMode(),
       event: "ERROR",
@@ -1879,75 +1904,181 @@ export class StandingOrderManager {
       price: this.params?.limitPrice,
       shares: this.params?.shares,
       phase: "WAITING",
-      detail: `placement failed: ${msg.slice(0, 250)}`,
+      detail: `placement failed: ${firstMsg.slice(0, 250)}`,
     })
-    // VERIFY WITH RETRIES: a single failed verification read must never be
-    // treated as "confirmed absent" — if the network is degraded, the lost
-    // order may well be live, and a blind re-place would DUPLICATE it. Try
-    // the adoption scan up to 3 times (2s apart) before deciding.
-    let verified = false
-    if (this.executor?.getOpenOrdersLive && this.params) {
-      for (let attempt = 1; attempt <= 3 && !verified; attempt++) {
+
+    // Attempt up to MAX_ATTEMPTS submissions total (1 already tried). Each
+    // iteration first scans for adoption (a lost-ack order landed) and only
+    // if confirmably absent issues a fresh placeOrder.
+    const MAX_ATTEMPTS = 3
+    const BACKOFFS_MS = [500, 1500, 3000]
+    let lastError: unknown = firstError
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Epoch guard — rollover / cancel / busy-watchdog happened while we
+      // were recovering. Do NOT resubmit into a stale world.
+      if (this.tickEpoch !== myEpoch) {
+        logEvent("warn", "Standing limit placement retry ABORTED: epoch changed during recovery — reconciler owns any orphan")
+        return null
+      }
+
+      // 1) Adoption scan (LIVE_V2 only exposes getOpenOrdersLive).
+      const adopted = await this.scanForAdoption(side, ids, placeReq)
+      if (adopted === "unverifiable" && attempt === MAX_ATTEMPTS) {
+        // Cannot verify — DO NOT retry blindly. Re-arm with a long cooldown
+        // so the reconciler cycle (60s) catches any untracked live order
+        // before another placement could duplicate it.
+        this.restingSide = null
+        this.readyForTrigger = true
+        this.nextSubmitAllowedMs = Date.now() + 60_000
+        this.status = "ARMED"
+        this.persistState()
+        logEvent(
+          "error",
+          `Standing limit: placement state UNVERIFIABLE after ${attempt} attempt(s) — the lost order may be live. Retry delayed 60s for the reconciler cross-check; check the account if this repeats`,
+        )
+        return null
+      }
+      if (adopted && adopted !== "unverifiable") {
+        this.restingOrder = adopted
+        this.restingSide = side
+        this.status = "RESTING"
+        this.persistState()
+        logEvent(
+          "warn",
+          `Standing limit: placement response was lost but the order IS live on the exchange (${adopted.exchangeOrderId}) — ADOPTED it, no duplicate placed`,
+        )
+        return adopted
+      }
+
+      // 2) Confirmably absent (or paper mode). Classify the last error —
+      // only TRANSIENT errors are retried; terminal errors (risk reject,
+      // insufficient collateral, invalid tick) stand down immediately.
+      if (!this.isTransientPlacementError(lastError)) {
+        logEvent(
+          "warn",
+          `Standing limit: terminal placement error (${(lastError instanceof Error ? lastError.message : String(lastError)).slice(0, 120)}) — no retry, re-arming with 5s cooldown`,
+        )
+        break
+      }
+
+      // 3) Back off, then retry the placement.
+      if (attempt < MAX_ATTEMPTS) {
+        const wait = BACKOFFS_MS[attempt - 1] ?? 3000
+        await new Promise((r) => setTimeout(r, wait))
+        if (this.tickEpoch !== myEpoch) {
+          logEvent("warn", "Standing limit placement retry ABORTED post-backoff: epoch changed")
+          return null
+        }
         try {
-          const open = await withTimeout(this.executor.getOpenOrdersLive(), EXEC_CALL_TIMEOUT_MS, "getOpenOrdersLive")
-          verified = true
-          const match = open.find(
-            (o) =>
-              o.assetId === ids.tokenId &&
-              o.side.toUpperCase() === "BUY" &&
-              Math.abs(o.price - this.params!.limitPrice) < 0.005,
+          const retry = await withTimeout(
+            this.executor!.placeOrder(placeReq),
+            EXEC_CALL_TIMEOUT_MS,
+            `placeOrder-retry-${attempt}`,
           )
-          if (match) {
-            this.restingOrder = {
-              clientOrderId: `adopted-${match.id}`,
-              exchangeOrderId: match.id,
-              marketId: ids.marketId,
-              tokenId: ids.tokenId,
-              side,
-              price: this.params.limitPrice,
-              shares: this.params.shares,
-              placedAtMs: match.createdAtMs || Date.now(),
-              phase: "WAITING",
-            }
-            this.restingSide = side
-            this.status = "RESTING"
-            this.persistState()
-            logEvent(
-              "warn",
-              `Standing limit: placement response was lost but the order IS live on the exchange (${match.id}) — ADOPTED it, no duplicate placed`,
-            )
-            return
-          }
-        } catch {
-          if (attempt < 3) await new Promise((r) => setTimeout(r, 2_000))
+          logEvent("info", `Standing limit placement RECOVERED on retry #${attempt} (order ${retry.exchangeOrderId})`)
+          insertOrderLog({
+            mode: this.deps.getMode(),
+            event: "SUBMITTED",
+            marketId: ids.marketId,
+            tokenId: ids.tokenId,
+            exchangeOrderId: retry.exchangeOrderId,
+            side,
+            price: placeReq.price,
+            shares: placeReq.shares,
+            phase: "WAITING",
+            detail: `retry #${attempt} succeeded after transient failure`,
+          })
+          return retry
+        } catch (e2) {
+          lastError = e2
+          const m2 = e2 instanceof Error ? e2.message : String(e2)
+          logEvent("warn", `Standing limit placement retry #${attempt} FAILED: ${m2} — re-scanning for adoption before next attempt`)
         }
       }
-    } else {
-      // No live order listing available (paper mode) — the simulated exchange
-      // cannot hold a lost order, so absence is structurally guaranteed.
-      verified = true
     }
 
-    // Re-open the gate with a cooldown sized to our confidence. Direction
-    // lock is retained — the race was legitimately won.
+    // Retries exhausted or terminal error. Re-open the trigger with a
+    // cooldown; the direction lock is retained (the race was legitimately
+    // won on the majority side).
     this.restingSide = null
     this.readyForTrigger = true
-    if (verified) {
-      this.nextSubmitAllowedMs = Date.now() + 5_000
-      logEvent("warn", "Standing limit: order confirmed NOT on the book — trigger re-armed with a 5s retry cooldown")
-    } else {
-      // UNVERIFIABLE: the exchange could not be read 3x. The order MAY be
-      // live. Use a 60s cooldown so the next reconciler cycle (60s) can flag
-      // any untracked order before a retry could possibly duplicate it.
-      this.nextSubmitAllowedMs = Date.now() + 60_000
-      logEvent(
-        "error",
-        "Standing limit: placement state UNVERIFIABLE after 3 attempts — the lost order may be live. Retry delayed 60s for the reconciler cross-check; check the account if this repeats",
-      )
-    }
+    this.nextSubmitAllowedMs = Date.now() + 5_000
     this.status = "ARMED"
     this.persistState()
+    logEvent("warn", "Standing limit: order confirmed NOT on the book — trigger re-armed with a 5s retry cooldown")
+    return null
   }
+
+  /**
+   * Look for a live open order that matches the placement request. Returns
+   * the OpenOrder to adopt, null when confirmably absent, or the literal
+   * string "unverifiable" when the read failed 3× and the exchange state
+   * is unknown (caller must NOT blind-retry in that case).
+   */
+  private async scanForAdoption(
+    side: TradeSide,
+    ids: { marketId: string; tokenId: string },
+    placeReq: PlaceOrderRequest,
+  ): Promise<OpenOrder | null | "unverifiable"> {
+    if (!this.executor?.getOpenOrdersLive) {
+      // Paper mode — the simulated exchange cannot hold a lost order, so
+      // absence is structurally guaranteed.
+      return null
+    }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const open = await withTimeout(this.executor.getOpenOrdersLive(), EXEC_CALL_TIMEOUT_MS, "getOpenOrdersLive")
+        const match = open.find(
+          (o) =>
+            o.assetId === ids.tokenId &&
+            o.side.toUpperCase() === "BUY" &&
+            Math.abs(o.price - placeReq.price) < 0.005,
+        )
+        if (match) {
+          return {
+            clientOrderId: `adopted-${match.id}`,
+            exchangeOrderId: match.id,
+            marketId: ids.marketId,
+            tokenId: ids.tokenId,
+            side,
+            price: placeReq.price,
+            shares: placeReq.shares,
+            placedAtMs: match.createdAtMs || Date.now(),
+            phase: "WAITING",
+          }
+        }
+        return null
+      } catch {
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 2_000))
+      }
+    }
+    return "unverifiable"
+  }
+
+  /**
+   * Classify a placeOrder error. Only transient failures (network flake,
+   * timeout, WS reconnect, 5xx) are retried — terminal errors (risk gate,
+   * balance, invalid price, unauthorized) are rejected as-is so we don't
+   * spam the exchange with guaranteed-to-fail requests.
+   */
+  private isTransientPlacementError(e: unknown): boolean {
+    const m = (e instanceof Error ? e.message : String(e)).toLowerCase()
+    if (!m) return true
+    // Terminal — do NOT retry.
+    if (/reject|insufficient|balance|allowance|unauthori[sz]ed|forbidden|invalid|tick.?size|not.?tradable|market.?closed|expired|nonce/.test(m)) {
+      return false
+    }
+    // Transient — retry.
+    if (/timeout|timed out|econn|socket|network|reconnect|disconnect|abort|fetch failed|502|503|504|gateway|reset|hang up|closed|ws /.test(m)) {
+      return true
+    }
+    // Default: unknown errors are treated as transient so we don't miss a
+    // recoverable failure. The retry loop is capped, so at worst we make 3
+    // attempts before standing down.
+    return true
+  }
+
 
   /**
    * PERMANENT DIRECTION AUDIT record persisted with every trade: the exact
