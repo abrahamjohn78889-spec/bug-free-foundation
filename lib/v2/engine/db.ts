@@ -466,24 +466,23 @@ export function insertOrderLog(entry: {
   const ts = Date.now()
   queueWrite(() => {
     try {
-      getDb()
-        .prepare(
-          `INSERT INTO order_log (ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail)
+      prep(
+        getDb(),
+        `INSERT INTO order_log (ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          ts,
-          entry.mode,
-          entry.event,
-          entry.marketId,
-          entry.tokenId ?? null,
-          entry.exchangeOrderId ?? null,
-          entry.side ?? null,
-          entry.price ?? null,
-          entry.shares ?? null,
-          entry.phase ?? null,
-          entry.detail ?? null,
-        )
+      ).run(
+        ts,
+        entry.mode,
+        entry.event,
+        entry.marketId,
+        entry.tokenId ?? null,
+        entry.exchangeOrderId ?? null,
+        entry.side ?? null,
+        entry.price ?? null,
+        entry.shares ?? null,
+        entry.phase ?? null,
+        entry.detail ?? null,
+      )
     } catch {
       // audit logging must never crash the trading loop
     }
@@ -491,9 +490,13 @@ export function insertOrderLog(entry: {
 }
 
 export function recentOrderLogs(mode: PipelineMode, limit = 100): Array<Record<string, unknown>> {
-  return getDb()
-    .prepare(`SELECT * FROM order_log WHERE mode = ? ORDER BY id DESC LIMIT ?`)
-    .all(mode, limit) as Array<Record<string, unknown>>
+  // Explicit projection avoids pulling unused columns over the wire on every
+  // dashboard poll (was `SELECT *`).
+  return prep(
+    getDb(),
+    `SELECT id, ts_ms, mode, event, market_id, token_id, exchange_order_id, side, price, shares, phase, detail
+       FROM order_log WHERE mode = ? ORDER BY id DESC LIMIT ?`,
+  ).all(mode, limit) as Array<Record<string, unknown>>
 }
 
 /**
