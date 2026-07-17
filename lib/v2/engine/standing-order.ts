@@ -2115,6 +2115,9 @@ export class StandingOrderManager {
       // background and would otherwise read a null strike. The fallback is a
       // last resort only; the official outcome is always preferred.
       const fallback = this.computeSpotFallback()
+      // BUG #5: mark these lots pending so PERCENT compounding in the NEW slot
+      // cannot size from a stale bankroll before settleOfficial credits payout.
+      for (const p of positions) this.pendingSettlementUids.add(p.tradeUid)
       void this.settleOfficial(positions, fallback)
     }
 
