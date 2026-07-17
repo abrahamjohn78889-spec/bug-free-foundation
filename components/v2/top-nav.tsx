@@ -2,9 +2,10 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { LogOut, TestTube2, Zap } from "lucide-react"
+import { LogOut, Moon, Sun, TestTube2, Zap } from "lucide-react"
 import { logout } from "@/components/v2/use-bot"
 import { SettingsDrawer } from "@/components/v2/settings-drawer"
+import { useUiSettings } from "@/components/v2/use-ui-settings"
 import type { PipelineMode } from "@/lib/v2/engine/types"
 
 const LINKS = [
@@ -35,6 +36,8 @@ const LINKS = [
  */
 export function TopNav({ engineMode }: { engineMode?: PipelineMode }) {
   const pathname = usePathname()
+  const [ui, updateUi] = useUiSettings()
+  const isLight = ui.theme === "light"
 
   return (
     <nav aria-label="Pipeline navigation" className="flex items-center gap-1.5">
@@ -67,6 +70,16 @@ export function TopNav({ engineMode }: { engineMode?: PipelineMode }) {
           )
         })}
       </div>
+
+      <button
+        type="button"
+        onClick={() => updateUi({ theme: isLight ? "dark" : "light" })}
+        aria-label={isLight ? "Switch to dark theme" : "Switch to light theme"}
+        title={isLight ? "Switch to dark theme" : "Switch to light theme"}
+        className="flex items-center justify-center rounded-md border border-border bg-secondary/60 p-1.5 text-muted-foreground transition-colors hover:border-primary/60 hover:text-foreground"
+      >
+        {isLight ? <Moon className="size-3.5" aria-hidden="true" /> : <Sun className="size-3.5" aria-hidden="true" />}
+      </button>
 
       <SettingsDrawer />
 

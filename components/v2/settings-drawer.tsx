@@ -59,6 +59,17 @@ export function SettingsDrawer() {
 
             <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4 font-mono text-xs">
               <Segmented
+                label="THEME"
+                hint="Dark ink terminal or bright daylight surface."
+                value={s.theme}
+                options={[
+                  { value: "dark", label: "Dark" },
+                  { value: "light", label: "Light" },
+                ]}
+                onChange={(v) => update({ theme: v as UiSettings["theme"] })}
+              />
+
+              <Segmented
                 label="DENSITY"
                 hint="Row and font size across tables and panels."
                 value={s.density}
@@ -68,6 +79,7 @@ export function SettingsDrawer() {
                 ]}
                 onChange={(v) => update({ density: v as UiSettings["density"] })}
               />
+
 
               <Toggle
                 label="AMBIENT BACKGROUND"
