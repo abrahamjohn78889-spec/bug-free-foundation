@@ -187,7 +187,10 @@ describe("StandingOrderManager — BTC-reference majority trigger + direction lo
 
     let s = h.snap()!
     expect(s.majoritySide).toBe("UP")
-    expect(s.lockedDirection).toBeNull()
+    // Bug #002 fix: majority side is LOCKED at the first eligible tick
+    // (window-open lock), not at trigger fire. So DOWN=0.92 hitting the
+    // trigger while UP is the BTC-reference majority must not lock DOWN.
+    expect(s.lockedDirection).toBe("UP")
     expect(s.executionCount).toBe(0)
     expect(s.openPositionCount).toBe(0)
 
@@ -267,7 +270,9 @@ describe("StandingOrderManager — safety guards", () => {
     const s = h.snap()!
     expect(s.status).toBe("ARMED")
     expect(s.executionCount).toBe(0)
-    expect(s.lockedDirection).toBeNull()
+    // Bug #002 fix: direction locks at window open once a majority is
+    // available, not at trigger. UP is the BTC-reference majority here.
+    expect(s.lockedDirection).toBe("UP")
 
     // Now push UP through the trigger — it should lock and fill on the next tick.
     h.setPrices(0.9, 0.5)
@@ -277,3 +282,63 @@ describe("StandingOrderManager — safety guards", () => {
     expect(s2.executionCount).toBe(1)
   })
 })
+
+describe("StandingOrderManager — Bug #002 window-open direction lock", () => {
+  it("locks the majority side at window open and does not follow a later BTC flip", async () => {
+    pinClock(1_000)
+    const h = makeHarness()
+    // Window open: BTC clearly above strike → majority UP. Both sides still
+    // below trigger so no fill yet — this isolates the lock timing.
+    h.setPrices(0.5, 0.5)
+    h.mgr.arm(0.9, 10, 5, 0.01, 0.99, 0.9, "AT_OR_ABOVE")
+    await flush()
+    h.setSpot(100_200)
+    await h.driveTick()
+
+    let s = h.snap()!
+    expect(s.majoritySide).toBe("UP")
+    expect(s.lockedDirection).toBe("UP")
+    expect(s.executionCount).toBe(0)
+
+    // BTC now flips decisively DOWN and DOWN reaches the trigger first.
+    // The lock must NOT follow, and the engine must NOT trade DOWN.
+    h.setSpot(99_800)
+    h.setPrices(0.4, 0.95)
+    await h.driveTick()
+    s = h.snap()!
+    expect(s.lockedDirection).toBe("UP")
+    expect(s.executionCount).toBe(0)
+    expect(s.openPositionCount).toBe(0)
+
+    // UP eventually reaches the trigger → the locked UP side fills.
+    h.setPrices(0.92, 0.3)
+    await h.driveTick()
+    s = h.snap()!
+    expect(s.lockedDirection).toBe("UP")
+    expect(s.executionCount).toBe(1)
+    expect(s.openPosition?.side).toBe("UP")
+  })
+
+  it("HOLDS instead of locking when BTC-reference majority is unavailable at window open", async () => {
+    pinClock(1_000)
+    const h = makeHarness()
+    // Prices are fresh, but no spot has arrived yet: btcReferenceDirection is
+    // null and there is no strike, so majority cannot be computed. The engine
+    // must HOLD rather than guess a side.
+    h.feed.freshFlag = true
+    h.setPrices(0.9, 0.2)
+    // Force spot feed to report a stale tick so freshSpotPrice() returns null.
+    const spot = (h as unknown as { mgr: { deps: { spotFeed: { latest: unknown } } } }).mgr.deps.spotFeed
+    Object.defineProperty(spot, "latest", { value: null, configurable: true })
+    h.mgr.arm(0.9, 10, 5, 0.01, 0.99, 0.9, "AT_OR_ABOVE")
+    await flush()
+    await h.driveTick()
+
+    const s = h.snap()!
+    expect(s.lockedDirection).toBeNull()
+    expect(s.executionCount).toBe(0)
+    expect(s.openPositionCount).toBe(0)
+    expect(s.status).toBe("NO_DATA")
+  })
+})
+

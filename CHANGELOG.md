@@ -13,6 +13,12 @@ All notable changes to P4 are documented here.
   settlement verification. **Verdict: defect confirmed upstream of
   serialization and fixed in both v1 (PAPER) and v2 (LIVE).** Report:
   `docs/investigations/bug-001-wrong-direction.md`.
+- **Bug #002 — Majority Side Selection & Locking Logic (P0).**
+  Traced majority calculation, strike capture, freshness gates, and the full
+  window-open → trigger → fill lifecycle. **Verdict: defect confirmed — direction
+  was locked at trigger fire instead of at window open, allowing a mid-window
+  BTC flip to change the locked side.** Report:
+  `docs/investigations/bug-002-majority-lock.md`.
 
 ### Fixed
 
@@ -21,3 +27,10 @@ All notable changes to P4 are documented here.
   monitors only the majority side (fresh BTC reference vs captured candle
   strike) and ignores opposite-side trigger touches. Added forensic audit fields
   and regression tests for the observed production failure shape.
+- **Window-open direction lock (Bug #002):** `lockedDirection` is now frozen
+  at the first eligible tick inside the entry window, using the BTC-reference
+  majority at that instant. Later BTC flips or opposite-side trigger touches
+  cannot change the committed side. When majority is unavailable at
+  window-open the engine HOLDs (`NO_DATA`) instead of guessing. Applies to
+  both PAPER_V1 and LIVE_V2. Regression tests added in
+  `tests/integration/standing-order.test.ts`.

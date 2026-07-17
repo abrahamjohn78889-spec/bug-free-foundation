@@ -1289,6 +1289,44 @@ export class StandingOrderManager {
         return
       }
 
+      // WINDOW-OPEN DIRECTION LOCK (Bug #002 fix).
+      //  • Per the strategy spec, the majority side must be locked at the
+      //    instant the execution window opens — NOT at trigger fire. Locking
+      //    later allowed the BTC-reference majority to flip between window
+      //    open and trigger (spot oscillating across strike), which meant a
+      //    late-flip minority side could end up locked when it happened to
+      //    hit the trigger first.
+      //  • First tick inside the open window with a real BTC-reference
+      //    majority freezes lockedDirection. Every subsequent tick evaluates
+      //    ONLY that side. If majority is unavailable at window open (stale
+      //    BTC feed or no CLOB snapshot yet) we HOLD until a real majority
+      //    appears — the engine never guesses a side.
+      //  • The trigger lock (generation + market identity snapshot) is still
+      //    taken when the trigger fires, on top of this earlier lock.
+      if (this.lockedDirection === null) {
+        if (majority.side === null) {
+          if (this.restingOrder) this.cancelRestingOrder()
+          if (!this.paused) this.status = "NO_DATA"
+          this.throttledLog(
+            `window-lock-nodata-${this.slotEndMs}`,
+            "warn",
+            "Standing limit HOLDING at window open: no BTC-reference majority available to lock direction (waiting for fresh spot / CLOB snapshot)",
+          )
+          this.logWithheld(
+            "window-open-no-majority",
+            "window opened but no BTC-reference majority available to lock direction",
+          )
+          return
+        }
+        this.lockedDirection = majority.side
+        logEvent(
+          "info",
+          `Standing limit DIRECTION LOCKED at window open: BTC-reference majority ${majority.side} (spot vs strike ${this.strike?.toFixed(2) ?? "?"}) — only this side is monitored for the trigger for the rest of the slot`,
+        )
+        this.persistState()
+      }
+
+
       // MAJORITY-SIDE TRIGGER + DIRECTION LOCK.
       //  • Before a side is locked, choose the current BTC-reference majority
       //    side (spot above strike = UP, spot below strike = DOWN) and evaluate
