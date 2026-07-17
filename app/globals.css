@@ -26,134 +26,248 @@
   --color-neon: var(--neon);
   --color-crimson: var(--crimson);
   --color-caution: var(--caution);
+  --color-info: var(--info);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) * 1.4);
-  --font-sans: var(--font-geist), system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-sans: var(--font-geist), 'Inter', system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), 'JetBrains Mono', ui-monospace, monospace;
 }
 
-/* v0-probe-marker-98765 */
-/* BTC 5M Terminal — light purple & blue institutional theme */
+/* ============================================================
+   INK + VIOLET — Premium dark trading terminal (v2 redesign)
+   Palette: #08090d bg / #111319 card / #1c2030 border / #8b5cf6 accent
+   ============================================================ */
 :root {
-  color-scheme: light;
-  /* backgrounds */
-  --background: oklch(0.98 0.003 280);   /* very light purple-blue off-white */
-  --foreground: oklch(0.20 0.05 280);    /* deep purple-blue text */
-  /* cards & surfaces */
-  --card: oklch(0.99 0.002 280);         /* off-white with purple tint */
-  --card-foreground: oklch(0.20 0.05 280);
-  --popover: oklch(0.99 0.002 280);
-  --popover-foreground: oklch(0.20 0.05 280);
-  /* primary = light purple for buy/UP/winning states */
-  --primary: oklch(0.65 0.12 290);       /* light purple — professional and readable */
-  --primary-foreground: oklch(0.98 0.003 280);
-  /* secondary — soft purple-gray panels */
-  --secondary: oklch(0.94 0.005 280);
-  --secondary-foreground: oklch(0.32 0.03 280);
-  /* muted */
-  --muted: oklch(0.92 0.004 280);
-  --muted-foreground: oklch(0.55 0.02 280);
-  /* accent — light blue */
-  --accent: oklch(0.72 0.10 250);        /* light blue accent */
-  --accent-foreground: oklch(0.20 0.05 280);
-  /* destructive — soft red-pink for sell/DOWN */
-  --destructive: oklch(0.60 0.15 20);    /* softer red for light theme */
-  /* borders & inputs */
-  --border: oklch(0.90 0.005 280);
-  --input: oklch(0.97 0.003 280);
-  --ring: oklch(0.65 0.12 290);
-  --radius: 0.375rem;
-  /* semantic brand tokens */
-  --neon: oklch(0.65 0.12 290);          /* light purple — used for UP / WIN / active */
-  --crimson: oklch(0.60 0.15 20);        /* soft red — used for DOWN / LOSS / danger */
-  --caution: oklch(0.65 0.14 50);        /* amber-orange — used for warnings */
+  color-scheme: dark;
+
+  /* Base surfaces — layered ink */
+  --background: oklch(0.14 0.012 265);   /* #08090d — page */
+  --foreground: oklch(0.96 0.005 265);   /* near-white text */
+
+  /* Card / popover — one step up */
+  --card: oklch(0.175 0.014 265);        /* #111319 — panel */
+  --card-foreground: oklch(0.96 0.005 265);
+  --popover: oklch(0.19 0.014 265);
+  --popover-foreground: oklch(0.96 0.005 265);
+
+  /* Primary = violet accent */
+  --primary: oklch(0.68 0.19 292);       /* #8b5cf6 */
+  --primary-foreground: oklch(0.14 0.012 265);
+
+  /* Secondary — inset surface for tabs, chips */
+  --secondary: oklch(0.22 0.015 265);
+  --secondary-foreground: oklch(0.85 0.01 265);
+
+  /* Muted — subtle text + rows */
+  --muted: oklch(0.21 0.014 265);
+  --muted-foreground: oklch(0.62 0.015 265);
+
+  /* Accent — hover / active surface */
+  --accent: oklch(0.26 0.02 275);
+  --accent-foreground: oklch(0.96 0.005 265);
+
+  /* Destructive — semantic red for sell / loss */
+  --destructive: oklch(0.63 0.22 22);
+
+  /* Borders — barely-there */
+  --border: oklch(0.27 0.018 265);       /* #1c2030 */
+  --input: oklch(0.20 0.014 265);
+  --ring: oklch(0.68 0.19 292);
+  --radius: 0.5rem;
+
+  /* Semantic tokens — used throughout panels */
+  --neon: oklch(0.75 0.17 155);          /* emerald — UP / WIN / active */
+  --crimson: oklch(0.66 0.22 22);        /* red — DOWN / LOSS / danger */
+  --caution: oklch(0.78 0.15 75);        /* amber — warnings */
+  --info: oklch(0.72 0.14 235);          /* blue — info */
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
-  body {
+  html, body {
     @apply bg-background text-foreground;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
+  /* Tabular numerals — critical for prices, PnL, latency */
+  .font-mono, code, pre, kbd, samp,
+  [class*='tabular'] {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Refined scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.28 0.015 265);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(0.35 0.02 265); background-clip: padding-box; border: 2px solid transparent; }
+  /* Selection */
+  ::selection { background: oklch(0.68 0.19 292 / 0.35); color: oklch(0.98 0.005 265); }
 }
 
-/* ---------- cyberpunk glow utilities ---------- */
+/* ============================================================
+   AMBIENT BACKGROUND — subtle grid + radial vignette (default on)
+   ============================================================ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(oklch(0.68 0.19 292 / 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.68 0.19 292 / 0.045) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, black 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, black 20%, transparent 75%);
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 0%, oklch(0.68 0.19 292 / 0.08), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 100%, oklch(0.72 0.14 235 / 0.06), transparent 60%);
+}
+/* Ambient can be toggled off from Settings */
+body.ambient-off::before,
+body.ambient-off::after { display: none; }
 
-/* On a light background, glows are softer and use a drop-shadow approach
-   so they read as emphasis rather than neon bleed. */
+/* Optional "Cyber Terminal" wallpaper — opt-in via Settings */
+body.wallpaper-cyber::after {
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 10%, oklch(0.55 0.22 292 / 0.10), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 85% 90%, oklch(0.55 0.20 235 / 0.08), transparent 55%),
+    linear-gradient(115deg, transparent 40%, oklch(0.55 0.22 292 / 0.04) 55%, transparent 70%);
+}
+
+/* Keep the app above the ambient layers */
+main, header, nav, .app-shell { position: relative; z-index: 1; }
+
+/* ============================================================
+   DENSITY — comfortable (default) vs compact
+   ============================================================ */
+body.density-compact { font-size: 13px; }
+body.density-compact .card,
+body.density-compact [data-panel] { --panel-pad: 0.75rem; }
+
+/* ============================================================
+   Numeric transition utility — animate PnL / price ticks
+   ============================================================ */
+.num-tick { transition: color 300ms ease, transform 200ms ease; }
+.num-up { color: var(--neon); }
+.num-down { color: var(--crimson); }
+
+/* ============================================================
+   Status pulse dot (LIVE / CONNECTED / ARMED)
+   ============================================================ */
+.pulse-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.45; }
+  70%, 100% { transform: scale(2.1); opacity: 0; }
+}
+
+/* ============================================================
+   Card polish — soft border + hover lift used by panels
+   ============================================================ */
+.panel-surface {
+  background: linear-gradient(180deg, oklch(0.185 0.014 265) 0%, oklch(0.17 0.014 265) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.03) inset,
+    0 8px 24px -12px oklch(0 0 0 / 0.6);
+}
+
+/* Soft glass — used only where appropriate (top bar) */
+.glass {
+  background: oklch(0.14 0.012 265 / 0.72);
+  backdrop-filter: saturate(140%) blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ============================================================
+   Glow utilities (subdued for dark theme — no neon bleed)
+   ============================================================ */
 .glow-neon {
-  box-shadow: 0 0 0 1px oklch(0.5 0.18 148 / 0.3), 0 2px 8px oklch(0.5 0.18 148 / 0.15);
+  box-shadow: 0 0 0 1px oklch(0.75 0.17 155 / 0.35), 0 4px 20px -6px oklch(0.75 0.17 155 / 0.35);
 }
-
 .glow-crimson {
-  box-shadow: 0 0 0 1px oklch(0.52 0.22 25 / 0.3), 0 2px 8px oklch(0.52 0.22 25 / 0.15);
+  box-shadow: 0 0 0 1px oklch(0.66 0.22 22 / 0.35), 0 4px 20px -6px oklch(0.66 0.22 22 / 0.35);
 }
+.text-glow-neon { text-shadow: 0 0 12px oklch(0.75 0.17 155 / 0.35); }
+.text-glow-crimson { text-shadow: 0 0 12px oklch(0.66 0.22 22 / 0.35); }
 
-.text-glow-neon {
-  text-shadow: none;
-}
-
-.text-glow-crimson {
-  text-shadow: none;
-}
-
+/* ============================================================
+   Electric border — armed / active states
+   ============================================================ */
 @keyframes electric-border {
-  0%, 100% {
-    box-shadow: 0 0 0 1px oklch(0.5 0.18 148 / 0.5), 0 0 8px oklch(0.5 0.18 148 / 0.2);
-  }
-  50% {
-    box-shadow: 0 0 0 2px oklch(0.5 0.18 148 / 0.7), 0 0 16px oklch(0.5 0.18 148 / 0.3);
-  }
+  0%, 100% { box-shadow: 0 0 0 1px oklch(0.75 0.17 155 / 0.55), 0 0 12px oklch(0.75 0.17 155 / 0.25); }
+  50%      { box-shadow: 0 0 0 2px oklch(0.75 0.17 155 / 0.75), 0 0 22px oklch(0.75 0.17 155 / 0.40); }
 }
-
 .electric-border {
-  animation: electric-border 0.6s ease-in-out infinite;
+  animation: electric-border 1.4s ease-in-out infinite;
   border-color: var(--neon);
 }
-
 @keyframes electric-border-crimson {
-  0%, 100% {
-    box-shadow: 0 0 0 1px oklch(0.52 0.22 25 / 0.5), 0 0 8px oklch(0.52 0.22 25 / 0.2);
-  }
-  50% {
-    box-shadow: 0 0 0 2px oklch(0.52 0.22 25 / 0.7), 0 0 16px oklch(0.52 0.22 25 / 0.3);
-  }
+  0%, 100% { box-shadow: 0 0 0 1px oklch(0.66 0.22 22 / 0.55), 0 0 12px oklch(0.66 0.22 22 / 0.25); }
+  50%      { box-shadow: 0 0 0 2px oklch(0.66 0.22 22 / 0.75), 0 0 22px oklch(0.66 0.22 22 / 0.40); }
 }
-
 .electric-border-crimson {
-  animation: electric-border-crimson 0.6s ease-in-out infinite;
+  animation: electric-border-crimson 1.4s ease-in-out infinite;
   border-color: var(--crimson);
 }
 
-/* Tab-switch entrance — fast fade + subtle rise, GPU-composited only
-   (opacity + transform), well under the 200ms budget. */
+/* ============================================================
+   Tab transitions
+   ============================================================ */
 @keyframes tab-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
+.tab-fade-in { animation: tab-fade-in 160ms ease-out; }
 
-.tab-fade-in {
-  animation: tab-fade-in 150ms ease-out;
-}
-
-/* Reduced motion: kill decorative animation entirely; keep state visible
-   via static border color. Countdown ms digits are also suppressed in JS. */
+/* ============================================================
+   Reduced motion + user "animations off" toggle
+   ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   .electric-border,
-  .electric-border-crimson {
-    animation: none;
-    box-shadow: 0 0 0 1px currentColor;
-  }
-  .tab-fade-in {
-    animation: none;
-  }
+  .electric-border-crimson,
+  .pulse-dot::after,
+  .tab-fade-in { animation: none; }
+  .electric-border,
+  .electric-border-crimson { box-shadow: 0 0 0 1px currentColor; }
+  .num-tick { transition: none; }
+}
+body.motion-off *,
+body.motion-off *::before,
+body.motion-off *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
 }
