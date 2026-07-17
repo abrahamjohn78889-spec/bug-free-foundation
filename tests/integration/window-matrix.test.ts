@@ -117,6 +117,9 @@ describe("standing-order time-window matrix — PAPER_V1 & LIVE_V2", () => {
               price: limit,
               shares: 5,
               postOnly: false,
+              phase: "TRIGGERED",
+              tif: "GTC",
+              expireAtMs: null,
             }
             const order = await exec.placeOrder(req)
             expect(order.price).toBe(limit)
