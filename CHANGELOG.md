@@ -6,6 +6,21 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #009 — LIVE_V2 rejects every standing-order trigger fire (P0, LIVE_V2
+  only).** `live.ts` hard-coded `POST_ONLY = true`, but the standing-order
+  design fires the trigger the moment the ask reaches `triggerPrice` and
+  submits a LIMIT BUY at `limitPrice ≥ triggerPrice` — marketable by
+  definition. Post-only rejected every triggered order with "would cross the
+  spread"; on live, no triggered order ever filled. Reported scenario:
+  trigger 70¢ / limit 85¢ (fires at ask ≥ 0.70, submits at 0.85, ask in
+  [0.70, 0.85] → post-only reject). Fix: `PlaceOrderRequest.postOnly` is now a
+  per-request flag (default `true` for the classic quote loop and cancel-
+  replace flows); standing-order's trigger fire passes `postOnly: false`.
+  Paper unaffected (never enforced post-only). Regression suite:
+  `tests/integration/bug-009-live-postonly.test.ts`. Report:
+  `docs/investigations/bug-009-live-postonly.md`.
+
+
 - **Bug #008 — LiveExecutor.checkFill over-reports on MATCHED status with
   under-matched size (P1, LIVE_V2 only).** `isFullyFilled` treated
   `status === "MATCHED"` as an unconditional full-fill signal, so an exchange
