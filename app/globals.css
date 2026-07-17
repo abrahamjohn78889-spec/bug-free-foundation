@@ -84,6 +84,80 @@
   --info: oklch(0.72 0.14 235);          /* blue — info */
 }
 
+/* ============================================================
+   LIGHT THEME — bright daylight surface (opt-in via <html class="light">)
+   Same violet accent + semantic red/green/amber/blue, but on paper.
+   ============================================================ */
+html.light {
+  color-scheme: light;
+
+  --background: oklch(0.985 0.003 265);   /* near-white page */
+  --foreground: oklch(0.20 0.012 265);    /* deep ink text */
+
+  --card: oklch(1 0 0);                    /* pure white panel */
+  --card-foreground: oklch(0.20 0.012 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.20 0.012 265);
+
+  --primary: oklch(0.55 0.20 292);         /* violet, deeper for contrast */
+  --primary-foreground: oklch(0.99 0.003 265);
+
+  --secondary: oklch(0.955 0.004 265);
+  --secondary-foreground: oklch(0.28 0.012 265);
+
+  --muted: oklch(0.955 0.004 265);
+  --muted-foreground: oklch(0.48 0.012 265);
+
+  --accent: oklch(0.94 0.014 292);
+  --accent-foreground: oklch(0.22 0.012 265);
+
+  --destructive: oklch(0.55 0.22 22);
+
+  --border: oklch(0.90 0.005 265);
+  --input: oklch(0.94 0.005 265);
+  --ring: oklch(0.55 0.20 292);
+
+  --neon: oklch(0.55 0.17 155);            /* emerald, darkened for white bg */
+  --crimson: oklch(0.55 0.22 22);
+  --caution: oklch(0.65 0.16 75);
+  --info: oklch(0.55 0.15 235);
+}
+
+/* Light-mode ambient — softer tints on white */
+html.light body::before {
+  background-image:
+    linear-gradient(oklch(0.55 0.20 292 / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.55 0.20 292 / 0.05) 1px, transparent 1px);
+}
+html.light body::after {
+  background:
+    radial-gradient(ellipse 70% 50% at 15% 0%, oklch(0.55 0.20 292 / 0.07), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 100% 100%, oklch(0.55 0.15 235 / 0.05), transparent 60%);
+}
+html.light body.wallpaper-cyber::after {
+  background:
+    radial-gradient(ellipse 60% 40% at 20% 10%, oklch(0.55 0.22 292 / 0.09), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 85% 90%, oklch(0.55 0.20 235 / 0.07), transparent 55%),
+    linear-gradient(115deg, transparent 40%, oklch(0.55 0.22 292 / 0.04) 55%, transparent 70%);
+}
+
+/* Light-mode scrollbars */
+html.light ::-webkit-scrollbar-thumb { background: oklch(0.82 0.008 265); background-clip: padding-box; }
+html.light ::-webkit-scrollbar-thumb:hover { background: oklch(0.72 0.012 265); background-clip: padding-box; }
+html.light ::selection { background: oklch(0.55 0.20 292 / 0.22); color: oklch(0.18 0.012 265); }
+
+/* Panel + glass surfaces re-tuned for white */
+html.light .panel-surface {
+  background: linear-gradient(180deg, oklch(1 0 0) 0%, oklch(0.985 0.003 265) 100%);
+  box-shadow:
+    0 1px 0 0 oklch(1 0 0 / 0.9) inset,
+    0 6px 20px -14px oklch(0.20 0.012 265 / 0.25);
+}
+html.light .glass {
+  background: oklch(1 0 0 / 0.78);
+  backdrop-filter: saturate(160%) blur(10px);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
