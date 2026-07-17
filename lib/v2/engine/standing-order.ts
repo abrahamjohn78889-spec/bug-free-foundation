@@ -1478,6 +1478,28 @@ export class StandingOrderManager {
           return
         }
 
+        // BUG #5 (compounding staleness gate): in PERCENT mode the next order's
+        // size depends on the pool. If the previous slot's payout has not yet
+        // been credited (settleOfficial runs asynchronously after rollover),
+        // sizing here would use a stale balance and break continuous
+        // compounding. Withhold until every pending lot is settled.
+        if (
+          this.params.sizingMode === "PERCENT" &&
+          this.pendingSettlementUids.size > 0
+        ) {
+          this.status = "WAITING_SETTLE"
+          this.throttledLog(
+            `settle-pending-${this.slotEndMs}`,
+            "info",
+            `Standing limit held: PERCENT compounding is waiting for ${this.pendingSettlementUids.size} prior lot(s) to settle so the next order sizes from the freshly-compounded balance`,
+          )
+          this.logWithheld(
+            "compound-pending-settlement",
+            `trigger crossed but ${this.pendingSettlementUids.size} prior lot(s) awaiting settlement — PERCENT compounding refuses to size from a stale balance`,
+          )
+          return
+        }
+
         // AUTOMATIC COMPOUNDING — size the order NOW, from the CURRENT
         // ledger-authoritative bankroll. In PERCENT mode every prior
         // settlement has already updated the pool, so this order compounds
