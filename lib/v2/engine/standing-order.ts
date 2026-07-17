@@ -2235,6 +2235,11 @@ export class StandingOrderManager {
       }
     }
     this.cancelRestingOrder()
+    // BUG #011 — new slot, new orders: reset the per-slot booked-id set so
+    // fresh exchange order ids never collide with a previous slot's guard.
+    this.bookedFillOrderIds.clear()
+
+
 
 
     const positions = this.positions
