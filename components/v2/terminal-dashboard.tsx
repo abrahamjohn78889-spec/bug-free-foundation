@@ -85,79 +85,101 @@ export function TerminalDashboard({ pipeline }: { pipeline: PipelineMode }) {
   }, [snap, pipeline, mutate])
 
   const runningElsewhere = Boolean(snap && snap.running && snap.mode !== pipeline)
+  const isPaper = pipeline === "PAPER_V1"
+  const accentText = isPaper ? "text-neon" : "text-crimson"
+  const accentDot = isPaper ? "bg-neon" : "bg-crimson"
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col gap-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-baseline gap-3">
-          <h1 className={`font-mono text-xl tracking-widest text-glow-neon ${pipeline === "PAPER_V1" ? "text-neon" : "text-crimson"}`}>
-            BTC 5M
-          </h1>
-          <p className="font-mono text-xs text-muted-foreground">
-            {pipeline === "PAPER_V1" ? "PAPER TERMINAL" : "LIVE TERMINAL"}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {snap ? (
-            <div className="hidden items-center gap-3 font-mono text-[11px] text-muted-foreground md:flex">
-              <span>
-                TG <span className={snap.telegramConnected ? "text-neon" : "text-muted-foreground"}>{snap.telegramConnected ? "LINKED" : "OFF"}</span>
-              </span>
-              <span>
-                KEYS <span className={snap.liveKeysLoaded ? "text-neon" : "text-muted-foreground"}>{snap.liveKeysLoaded ? "VAULTED" : "NONE"}</span>
-              </span>
+    <div className="app-shell min-h-dvh">
+      {/* Sticky glass header — always-visible identity + pipeline + status */}
+      <header className="glass sticky top-0 z-30">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60 font-mono text-[10px] tracking-widest ${accentText}`}>
+              <span className={`size-1.5 rounded-full ${accentDot}`} aria-hidden />
             </div>
-          ) : null}
-          <TopNav engineMode={snap?.mode} />
+            <div className="min-w-0">
+              <h1 className="truncate font-mono text-sm font-semibold tracking-widest text-foreground">
+                BTC 5M <span className="text-muted-foreground/60">·</span>{" "}
+                <span className={accentText}>{isPaper ? "PAPER TERMINAL" : "LIVE TERMINAL"}</span>
+              </h1>
+              <p className="hidden font-mono text-[10px] tracking-widest text-muted-foreground sm:block">
+                POLYMARKET FOK MAKER · 5-MINUTE BTC UP/DOWN
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {snap ? (
+              <div className="hidden items-center gap-3 rounded-md border border-border bg-secondary/40 px-2.5 py-1 font-mono text-[10px] tracking-widest text-muted-foreground md:flex">
+                <StatusChip label="TG" ok={snap.telegramConnected} okText="LINKED" offText="OFF" />
+                <span className="text-border">·</span>
+                <StatusChip label="KEYS" ok={snap.liveKeysLoaded} okText="VAULTED" offText="NONE" />
+                <span className="text-border">·</span>
+                <StatusChip label="ENGINE" ok={Boolean(snap.running)} okText="RUNNING" offText="IDLE" />
+              </div>
+            ) : null}
+            <TopNav engineMode={snap?.mode} />
+          </div>
         </div>
       </header>
 
-      {runningElsewhere && snap ? (
-        <div className="rounded-md border border-caution bg-caution/10 px-3 py-2 font-mono text-xs text-caution" role="status">
-          ENGINE IS RUNNING IN {snap.mode === "PAPER_V1" ? "V1 PAPER" : "V2 LIVE"} — stop it from the command deck to
-          switch this page&apos;s pipeline ({pipeline === "PAPER_V1" ? "V1 PAPER" : "V2 LIVE"}). Controls below operate
-          on the running engine.
-        </div>
-      ) : null}
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4 md:px-6">
+        {runningElsewhere && snap ? (
+          <div className="rounded-md border border-caution/50 bg-caution/10 px-3 py-2 font-mono text-xs text-caution" role="status">
+            ENGINE IS RUNNING IN {snap.mode === "PAPER_V1" ? "V1 PAPER" : "V2 LIVE"} — stop it from the command deck to
+            switch this page&apos;s pipeline ({pipeline === "PAPER_V1" ? "V1 PAPER" : "V2 LIVE"}). Controls below operate
+            on the running engine.
+          </div>
+        ) : null}
 
-      {!snap ? (
-        <div className="flex flex-1 items-center justify-center">
-          {statusError ? (
-            <div className="flex max-w-xl flex-col items-center gap-2 px-4 text-center">
-              <p className="font-mono text-sm text-crimson">engine failed to start</p>
-              <p className="break-all font-mono text-xs leading-relaxed text-muted-foreground">
-                {statusError instanceof Error ? statusError.message : String(statusError)}
-              </p>
-            </div>
-          ) : (
-            <p className="font-mono text-sm text-muted-foreground">booting engine…</p>
-          )}
-        </div>
-      ) : (
-        <>
-          <nav className="flex gap-1 rounded-lg border border-border bg-card p-1" role="tablist" aria-label="Terminal sections">
-            {TABS.map((t) => {
-              const Icon = t.icon
-              const activeTab = tab === t.id
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab}
-                  aria-label={t.label}
-                  title={t.label}
-                  onClick={() => setTab(t.id)}
-                  className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 font-mono text-xs tracking-widest transition-colors ${
-                    activeTab ? "bg-crimson/10 text-crimson text-glow-neon" : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  <Icon className="size-4" aria-hidden />
-                  <span className="hidden sm:inline">{t.label}</span>
-                </button>
-              )
-            })}
-          </nav>
+        {!snap ? (
+          <div className="flex flex-1 items-center justify-center py-24">
+            {statusError ? (
+              <div className="flex max-w-xl flex-col items-center gap-2 rounded-lg border border-crimson/30 bg-crimson/5 px-6 py-6 text-center">
+                <p className="font-mono text-sm text-crimson">engine failed to start</p>
+                <p className="break-all font-mono text-xs leading-relaxed text-muted-foreground">
+                  {statusError instanceof Error ? statusError.message : String(statusError)}
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <div className="size-8 rounded-full border-2 border-border border-t-primary animate-spin" aria-hidden />
+                <p className="font-mono text-xs tracking-widest text-muted-foreground">BOOTING ENGINE…</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <nav
+              className="flex gap-0.5 overflow-x-auto rounded-lg border border-border bg-card/60 p-1"
+              role="tablist"
+              aria-label="Terminal sections"
+            >
+              {TABS.map((t) => {
+                const Icon = t.icon
+                const activeTab = tab === t.id
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab}
+                    aria-label={t.label}
+                    title={t.label}
+                    onClick={() => setTab(t.id)}
+                    className={`flex flex-1 min-w-[92px] items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-[11px] tracking-widest transition-all ${
+                      activeTab
+                        ? "bg-primary/15 text-primary shadow-[0_0_0_1px_var(--primary)_inset]"
+                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="size-3.5" aria-hidden />
+                    <span className="hidden sm:inline">{t.label}</span>
+                  </button>
+                )
+              })}
+            </nav>
+
 
           {/* Form-bearing tabs stay MOUNTED (hidden) so in-progress operator
               edits survive tab switches; frozen snaps + memo keep hidden
