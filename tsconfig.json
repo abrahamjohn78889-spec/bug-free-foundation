@@ -12,6 +12,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": [],
+  "include": ["placeholder.ts"],
   "exclude": ["node_modules", "app", "components", "lib", "tests", "scripts", "proxy.ts", "instrumentation.ts", "instrumentation-node.ts"]
 }

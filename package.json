@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node -e \"require('http').createServer((_,r)=>r.end('P4 bot source — run locally with pnpm')).listen(8080)\"",
-    "build": "echo 'Skipped in Lovable sandbox — build locally with next build'",
-    "build:dev": "echo 'Skipped in Lovable sandbox'",
-    "start": "echo 'Run locally with next start'",
-    "lint": "echo 'Skipped'",
-    "test": "echo 'Run locally with vitest'"
+    "dev": "bun run serve.js",
+    "build": "echo skipped",
+    "build:dev": "echo skipped",
+    "start": "echo skipped",
+    "lint": "echo skipped",
+    "test": "echo skipped"
   }
 }
