@@ -308,37 +308,38 @@ export function openTrade(t: {
   /** JSON audit record: why the trade opened (trigger, side selection, fill). */
   explanation?: string | null
 }): number {
-  const info = getDb()
-    .prepare(
-      `INSERT INTO trades
+  const info = prep(
+    getDb(),
+    `INSERT INTO trades
         (market_id, slot_end_ms, side, price, shares, cost, result, pnl, balance_after, dust_saved, mode,
          status, order_id, trade_uid, entry_at_ms, mark_price, unrealized_pnl, explanation)
        VALUES (?, ?, ?, ?, ?, ?, 'OPEN', 0, ?, 0, ?, 'OPEN', ?, ?, ?, ?, 0, ?)`,
-    )
-    .run(
-      t.marketId,
-      t.slotEndMs,
-      t.side,
-      t.price,
-      t.shares,
-      t.cost,
-      t.balanceAfter,
-      t.mode,
-      t.orderId ?? null,
-      t.tradeUid ?? null,
-      Date.now(),
-      t.price,
-      t.explanation ?? null,
-    )
+  ).run(
+    t.marketId,
+    t.slotEndMs,
+    t.side,
+    t.price,
+    t.shares,
+    t.cost,
+    t.balanceAfter,
+    t.mode,
+    t.orderId ?? null,
+    t.tradeUid ?? null,
+    Date.now(),
+    t.price,
+    t.explanation ?? null,
+  )
   return Number(info.lastInsertRowid)
 }
 
 /** Update the live mark + unrealized PnL on an OPEN trade row. */
 export function updateOpenTradeMark(id: number, markPrice: number, unrealizedPnl: number) {
   try {
-    getDb()
-      .prepare(`UPDATE trades SET mark_price = ?, unrealized_pnl = ? WHERE id = ? AND status = 'OPEN'`)
-      .run(markPrice, unrealizedPnl, id)
+    prep(getDb(), `UPDATE trades SET mark_price = ?, unrealized_pnl = ? WHERE id = ? AND status = 'OPEN'`).run(
+      markPrice,
+      unrealizedPnl,
+      id,
+    )
   } catch {
     /* live-mark updates must never crash the trading loop */
   }
