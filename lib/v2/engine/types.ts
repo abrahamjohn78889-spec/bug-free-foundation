@@ -349,7 +349,17 @@ export interface LiveAccountTrade {
   traderSide: string
   matchTimeMs: number
   txHash: string | null
+  /**
+   * BUG #012 — exchange order id(s) associated with this fill event.
+   *  • LIVE_V2: populated from CLOB `/data/trades`
+   *    (`maker_orders[].order_id` for maker fills; `taker_order_id` fallback).
+   *  • PAPER_V1: populated from the simulated resting order.
+   * Empty array means the executor could not attribute the fill to a known
+   * order — the fill-reconciler surfaces these as UNATTRIBUTED.
+   */
+  orderIds: string[]
 }
+
 
 /** A single active position, from the official Polymarket Data API. */
 export interface LiveAccountPosition {
