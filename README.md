@@ -1,5 +1,8 @@
 # Polymarket 5-Minute BTC Maker-Snipe Engine
 
+> **VPS / self-host notice:** this repo now ships with the real Next.js `package.json` and `tsconfig.json` out of the box. The previous Lovable-sandbox placeholder (`serve.js`, `build-placeholder.js`, `placeholder.ts`) has been removed, so cloning to a VPS and running `pnpm install && pnpm build && pnpm start` will produce the actual trading terminal — not the static placeholder page.
+
+
 A dual-pipeline (V1 Paper / V2 Live) high-frequency **maker** engine for Polymarket's 5-minute Bitcoin Up/Down contracts, built on the CLOB V2 architecture (pUSD collateral, EIP-712 + HMAC L2 auth). Includes a cyberpunk web dashboard, an integrated Telegram control bot, and a local SQLite ledger.
 
 > **Disclaimer:** Trading involves substantial risk. LIVE_V2 mode places real on-chain orders with real capital. Always validate a strategy in PAPER_V1 mode first. Nothing here is financial advice.
