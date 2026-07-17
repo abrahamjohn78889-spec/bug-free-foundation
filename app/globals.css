@@ -1,0 +1,159 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-neon: var(--neon);
+  --color-crimson: var(--crimson);
+  --color-caution: var(--caution);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --font-sans: var(--font-geist), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+/* v0-probe-marker-98765 */
+/* BTC 5M Terminal — light purple & blue institutional theme */
+:root {
+  color-scheme: light;
+  /* backgrounds */
+  --background: oklch(0.98 0.003 280);   /* very light purple-blue off-white */
+  --foreground: oklch(0.20 0.05 280);    /* deep purple-blue text */
+  /* cards & surfaces */
+  --card: oklch(0.99 0.002 280);         /* off-white with purple tint */
+  --card-foreground: oklch(0.20 0.05 280);
+  --popover: oklch(0.99 0.002 280);
+  --popover-foreground: oklch(0.20 0.05 280);
+  /* primary = light purple for buy/UP/winning states */
+  --primary: oklch(0.65 0.12 290);       /* light purple — professional and readable */
+  --primary-foreground: oklch(0.98 0.003 280);
+  /* secondary — soft purple-gray panels */
+  --secondary: oklch(0.94 0.005 280);
+  --secondary-foreground: oklch(0.32 0.03 280);
+  /* muted */
+  --muted: oklch(0.92 0.004 280);
+  --muted-foreground: oklch(0.55 0.02 280);
+  /* accent — light blue */
+  --accent: oklch(0.72 0.10 250);        /* light blue accent */
+  --accent-foreground: oklch(0.20 0.05 280);
+  /* destructive — soft red-pink for sell/DOWN */
+  --destructive: oklch(0.60 0.15 20);    /* softer red for light theme */
+  /* borders & inputs */
+  --border: oklch(0.90 0.005 280);
+  --input: oklch(0.97 0.003 280);
+  --ring: oklch(0.65 0.12 290);
+  --radius: 0.375rem;
+  /* semantic brand tokens */
+  --neon: oklch(0.65 0.12 290);          /* light purple — used for UP / WIN / active */
+  --crimson: oklch(0.60 0.15 20);        /* soft red — used for DOWN / LOSS / danger */
+  --caution: oklch(0.65 0.14 50);        /* amber-orange — used for warnings */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ---------- cyberpunk glow utilities ---------- */
+
+/* On a light background, glows are softer and use a drop-shadow approach
+   so they read as emphasis rather than neon bleed. */
+.glow-neon {
+  box-shadow: 0 0 0 1px oklch(0.5 0.18 148 / 0.3), 0 2px 8px oklch(0.5 0.18 148 / 0.15);
+}
+
+.glow-crimson {
+  box-shadow: 0 0 0 1px oklch(0.52 0.22 25 / 0.3), 0 2px 8px oklch(0.52 0.22 25 / 0.15);
+}
+
+.text-glow-neon {
+  text-shadow: none;
+}
+
+.text-glow-crimson {
+  text-shadow: none;
+}
+
+@keyframes electric-border {
+  0%, 100% {
+    box-shadow: 0 0 0 1px oklch(0.5 0.18 148 / 0.5), 0 0 8px oklch(0.5 0.18 148 / 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 2px oklch(0.5 0.18 148 / 0.7), 0 0 16px oklch(0.5 0.18 148 / 0.3);
+  }
+}
+
+.electric-border {
+  animation: electric-border 0.6s ease-in-out infinite;
+  border-color: var(--neon);
+}
+
+@keyframes electric-border-crimson {
+  0%, 100% {
+    box-shadow: 0 0 0 1px oklch(0.52 0.22 25 / 0.5), 0 0 8px oklch(0.52 0.22 25 / 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 2px oklch(0.52 0.22 25 / 0.7), 0 0 16px oklch(0.52 0.22 25 / 0.3);
+  }
+}
+
+.electric-border-crimson {
+  animation: electric-border-crimson 0.6s ease-in-out infinite;
+  border-color: var(--crimson);
+}
+
+/* Tab-switch entrance — fast fade + subtle rise, GPU-composited only
+   (opacity + transform), well under the 200ms budget. */
+@keyframes tab-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tab-fade-in {
+  animation: tab-fade-in 150ms ease-out;
+}
+
+/* Reduced motion: kill decorative animation entirely; keep state visible
+   via static border color. Countdown ms digits are also suppressed in JS. */
+@media (prefers-reduced-motion: reduce) {
+  .electric-border,
+  .electric-border-crimson {
+    animation: none;
+    box-shadow: 0 0 0 1px currentColor;
+  }
+  .tab-fade-in {
+    animation: none;
+  }
+}
