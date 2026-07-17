@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { currentSlotEndMs, nowMs, marketIdForSlot, tMinusMs } from "./clock"
-import { insertOrderLog, insertTrade, kvGet, kvSet, openTrade, settleTrade, updateOpenTradeMark, updateSettledBalance } from "./db"
+import { insertLatencySample, insertOrderLog, insertTrade, kvGet, kvSet, openTrade, recordLatencyFillObserved, settleTrade, updateOpenTradeMark, updateSettledBalance } from "./db"
 import { logEvent } from "./events"
 import { notify } from "./notifier"
 import { startSettlementVerifier, verifySettlements } from "./settlement-verifier"
