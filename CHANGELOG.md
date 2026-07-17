@@ -6,6 +6,18 @@ All notable changes to P4 are documented here.
 
 ### Fixed
 
+- **Bug #011 — Retried rollover could double-book the ledger (P0 latent, PAPER_V1 + LIVE_V2).**
+  `onFill` had no per-order idempotency guard. Any path that reached it twice
+  with the same `exchangeOrderId` (rollover retry, `pollRestingFill` +
+  `rolloverSlot` final-checkFill race, duplicate exchange ack) would insert
+  two `trades` rows, double-debit the bankroll, and push two lots into
+  `positions`. Fix: track booked ids in `bookedFillOrderIds`, short-circuit
+  duplicates with an `order_log` breadcrumb, and clear the set at slot
+  rollover. Report: `docs/investigations/bug-011-rollover-idempotency.md`.
+  Regression: `tests/integration/bug-011-rollover-idempotency.test.ts`.
+
+
+
 - **Bug #010 — Short-window fill loss at rollover (P0, PAPER_V1 + LIVE_V2).**
   With a short entry time window (5s / 15s / 30s / 45s) the trigger can fire
   in the final few hundred ms of a slot. `rolloverSlot()` cancelled the
