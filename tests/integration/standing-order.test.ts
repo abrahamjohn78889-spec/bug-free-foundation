@@ -342,3 +342,70 @@ describe("StandingOrderManager — Bug #002 window-open direction lock", () => {
   })
 })
 
+describe("StandingOrderManager — Bug #003 standing-order placement integrity", () => {
+  it("majority DOWN → BUY DOWN at the configured limit price with the configured shares", async () => {
+    pinClock(1_000)
+    const h = makeHarness()
+    // Configured strategy: BUY 7 shares @ $0.99 target, trigger $0.98,
+    // AT_OR_ABOVE. BTC decisively below strike → majority is DOWN.
+    h.setPrices(0.5, 0.5)
+    h.mgr.arm(0.99, 7, 5, 0.01, 0.99, 0.98, "AT_OR_ABOVE")
+    await flush()
+    h.setSpot(99_800)
+    await h.driveTick()
+
+    // Direction must lock DOWN at window-open, BEFORE any trigger crossing.
+    let s = h.snap()!
+    expect(s.majoritySide).toBe("DOWN")
+    expect(s.lockedDirection).toBe("DOWN")
+    expect(s.executionCount).toBe(0)
+
+    // DOWN ask crosses the trigger → the standing limit fires exactly once at
+    // the configured limit price for the configured share count on the DOWN side.
+    h.setPrices(0.3, 0.98)
+    await h.driveTick()
+    s = h.snap()!
+    expect(s.executionCount).toBe(1)
+    expect(s.openPosition?.side).toBe("DOWN")
+    expect(s.openPosition?.shares).toBe(7)
+    expect(s.openPosition?.price).toBeCloseTo(0.99, 5)
+
+    // A subsequent tick with the trigger still crossed must NOT submit again
+    // (one-order-per-window invariant).
+    await h.driveTick()
+    await h.driveTick()
+    s = h.snap()!
+    expect(s.executionCount).toBe(1)
+    expect(s.openPositionCount).toBe(1)
+  })
+
+  it("trigger only gates WHEN the order submits, never WHICH side is traded", async () => {
+    pinClock(1_000)
+    const h = makeHarness()
+    // Majority UP locked at window open, but UP is still below trigger.
+    h.setPrices(0.5, 0.5)
+    h.mgr.arm(0.99, 5, 5, 0.01, 0.99, 0.98, "AT_OR_ABOVE")
+    await flush()
+    h.setSpot(100_200)
+    await h.driveTick()
+    expect(h.snap()!.lockedDirection).toBe("UP")
+
+    // DOWN wicks through the trigger. The trigger determines timing only —
+    // it must NEVER flip the locked side.
+    h.setPrices(0.4, 0.99)
+    await h.driveTick()
+    let s = h.snap()!
+    expect(s.executionCount).toBe(0)
+    expect(s.lockedDirection).toBe("UP")
+
+    // UP finally reaches the trigger → BUY UP fires at the configured limit.
+    h.setPrices(0.98, 0.4)
+    await h.driveTick()
+    s = h.snap()!
+    expect(s.executionCount).toBe(1)
+    expect(s.openPosition?.side).toBe("UP")
+    expect(s.openPosition?.price).toBeCloseTo(0.99, 5)
+  })
+})
+
+

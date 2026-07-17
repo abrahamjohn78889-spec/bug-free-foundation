@@ -19,6 +19,15 @@ All notable changes to P4 are documented here.
   was locked at trigger fire instead of at window open, allowing a mid-window
   BTC flip to change the locked side.** Report:
   `docs/investigations/bug-002-majority-lock.md`.
+- **Bug #003 — Standing Limit Order Placement, Pricing & Sizing (P0).**
+  Traced the full pipeline `Feed → Majority → Lock → Order Prep → Trigger →
+  Risk → Serialization → Submission → Fill` in both PAPER_V1 and LIVE_V2.
+  Verified side, limit price, share count, and tokenId are preserved end-to-end;
+  order is armed once, submitted once, never before window-open or after
+  settlement. **Verdict: no defect — the pipeline matches the strategy spec
+  after Bug #001/#002 fixes.** Added regression tests locking the behaviour.
+  Report: `docs/investigations/bug-003-standing-order.md`.
+
 
 ### Fixed
 
