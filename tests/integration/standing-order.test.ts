@@ -373,7 +373,7 @@ describe("StandingOrderManager — Bug #003 standing-order placement integrity",
     expect(s.openPosition?.side).toBe("DOWN")
     expect(s.openPosition?.shares).toBe(7)
     // Bug #013 taker-realism: fill price = min(limit 0.99, live ask 0.98) = 0.98.
-    expect(s.openPosition?.price).toBeCloseTo(0.98, 5)
+    expect(s.openPosition?.entryPrice).toBeCloseTo(0.98, 5)
 
     // A subsequent tick with the trigger still crossed must NOT submit again
     // (one-order-per-window invariant).
@@ -410,7 +410,7 @@ describe("StandingOrderManager — Bug #003 standing-order placement integrity",
     expect(s.executionCount).toBe(1)
     expect(s.openPosition?.side).toBe("UP")
     // Bug #013 taker-realism: fill price = min(limit 0.99, live ask 0.98) = 0.98.
-    expect(s.openPosition?.price).toBeCloseTo(0.98, 5)
+    expect(s.openPosition?.entryPrice).toBeCloseTo(0.98, 5)
   })
 })
 
