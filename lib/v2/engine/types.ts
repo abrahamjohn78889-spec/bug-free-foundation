@@ -98,6 +98,7 @@ export type StandingOrderStatus =
   | "BLOCKED" // risk gate veto (kill switch / daily caps) — armed, auto-resumes when the gate clears
   | "WINDOW_WAITING" // final entry window has not opened yet — monitoring only, no order until remaining time ≤ window
   | "WINDOW_EXPIRED" // settlement boundary edge case: trigger reached but the market settled before submission
+  | "WAITING_SETTLE" // BUG #5: PERCENT compounding is holding until prior lots settle so sizing uses the fresh balance
 
 /**
  * Position sizing model for the Standing Limit Order.
