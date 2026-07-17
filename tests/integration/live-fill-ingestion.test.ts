@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { LiveExecutor } from "../../lib/v2/engine/execution/live"
-import { insertTrade, recentTrades } from "../../lib/v2/engine/db"
+import { flushWriteQueueSync, insertTrade, recentTrades } from "../../lib/v2/engine/db"
 import type { OpenOrder } from "../../lib/v2/engine/types"
+
 
 /**
  * BUG #8 + LIVE-FILL PARITY SPOT-CHECK
@@ -71,8 +72,9 @@ function replayLedgerMath(filledPrice: number, filledShares: number, winner: "UP
 }
 
 describe("LIVE fill ingestion — end-to-end spot-check", () => {
-  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: false }))
-  afterEach(() => vi.useRealTimers())
+  // The ledger write path uses queueWrite + setImmediate; keep real timers
+  // (no vi.useFakeTimers) so setImmediate actually fires within the test.
+
 
   it("full fill: propagates filledPrice, filledShares, cost, and pnl to the ledger", async () => {
     const exec = makeExecutor({
@@ -106,8 +108,9 @@ describe("LIVE fill ingestion — end-to-end spot-check", () => {
     })
 
     // Read back the row and assert every field.
-    await new Promise((r) => setImmediate(r)) // let queueWrite flush
+    flushWriteQueueSync()
     const rows = recentTrades("LIVE_V2", 5)
+
     const row = rows.find((r) => r.marketId === baseOrder.marketId)
     expect(row).toBeDefined()
     expect(row!.price).toBe(0.95)

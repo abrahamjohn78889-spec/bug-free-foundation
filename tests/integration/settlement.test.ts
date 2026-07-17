@@ -81,7 +81,12 @@ function makeHarness(opts: {
   // starts at the strike; fillThenSettle flips it to the settlement price right
   // before the slot boundary.
   const strikePrice = opts.strikePrice ?? 100_000
-  const state = { spot: strikePrice as number | null, fresh: opts.spotFresh !== false }
+  // Spot MUST be fresh at arm-time so the strike is captured and direction is
+  // locked. `opts.spotFresh: false` is applied AFTER arm+fill via `fillThenSettle`
+  // (settlement-time stale-spot condition), which is the real failure mode
+  // being regression-tested — not "stale from boot" (that just prevents any
+  // trade from being placed at all).
+  const state = { spot: strikePrice as number | null, fresh: true }
   const spotFeed = {
     get latest() {
       if (state.spot === null) return null
@@ -138,7 +143,13 @@ async function fillThenSettle(
   mgr: StandingOrderManager,
   feed: FakeClobFeed,
   side: "UP" | "DOWN",
-  opts: { spotState?: { spot: number | null; fresh: boolean }; settlementSpot?: number | null } = {},
+  opts: {
+    spotState?: { spot: number | null; fresh: boolean }
+    settlementSpot?: number | null
+    /** Mark the spot feed stale AFTER the fill (mirrors the settlement-time
+     *  stale-tick failure mode without preventing the arm-time strike capture). */
+    settlementStale?: boolean
+  } = {},
 ) {
   if (side === "UP") feed.setPrices(0.9, 0.2)
   else feed.setPrices(0.2, 0.9)
@@ -154,6 +165,9 @@ async function fillThenSettle(
   // captured at arm time (only when the test supplies a distinct value).
   if (opts.spotState && opts.settlementSpot !== undefined) {
     opts.spotState.spot = opts.settlementSpot
+  }
+  if (opts.spotState && opts.settlementStale) {
+    opts.spotState.fresh = false
   }
 
   // Advance the wall clock past the current slot boundary so the next tick
@@ -199,8 +213,10 @@ describe("settlement — official resolution is the source of truth", () => {
   it("REGRESSION: UP bet that officially WON is NOT booked as a loss even when the spot tick is stale/zero", async () => {
     // This is the exact failure condition: official winner = UP, but the local
     // spot heuristic would have returned 0 → DOWN and misbooked a loss.
-    const { mgr, feed } = makeHarness({ resolution: "UP", spotPrice: 0, spotFresh: false })
-    const row = await fillThenSettle(mgr, feed, "UP")
+    // Spot is fresh at arm-time (so the strike captures and the trade fills),
+    // then forced stale + zero at settlement to reproduce the real failure.
+    const { mgr, feed, spotState } = makeHarness({ resolution: "UP" })
+    const row = await fillThenSettle(mgr, feed, "UP", { spotState, settlementSpot: 0, settlementStale: true })
     expect(row.result).toBe("WIN")
     expect(row.pnl).toBeGreaterThan(0)
   })
@@ -208,8 +224,8 @@ describe("settlement — official resolution is the source of truth", () => {
 
 describe("settlement — fail-safe when official resolution is unavailable", () => {
   it("settles SCRATCH (cost refunded, zero PnL) rather than guessing when there is no resolution and the spot is stale", async () => {
-    const { mgr, feed } = makeHarness({ resolution: null, spotPrice: 0, spotFresh: false })
-    const row = await fillThenSettle(mgr, feed, "UP")
+    const { mgr, feed, spotState } = makeHarness({ resolution: null })
+    const row = await fillThenSettle(mgr, feed, "UP", { spotState, settlementSpot: 0, settlementStale: true })
     // The persisted ledger row is the source of truth: SCRATCH refunds the
     // entry cost so realized PnL is exactly zero — never a fabricated loss.
     expect(row.result).toBe("SCRATCH")
