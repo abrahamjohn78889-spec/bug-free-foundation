@@ -144,6 +144,15 @@ export class Edge5Engine {
     isRunning: () => this.running,
   })
 
+  /** Read-only end-to-end CLOB fill ↔ ledger cross-check (60s cadence).
+   *  Surfaces UNBOOKED / UNATTRIBUTED / DUPLICATE / ORPHAN drift as
+   *  order_log ERROR entries. Never mutates orders or ledger rows. */
+  private fillReconciler = new FillReconciler({
+    getExecutor: () => this.executor,
+    getMode: () => this.mode,
+    isRunning: () => this.running,
+  })
+
   /**
    * Independent standing limit order subsystem. Runs on its own loop,
    * fully decoupled from this engine's tick loop, the Time Window /
