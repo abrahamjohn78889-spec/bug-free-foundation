@@ -222,38 +222,42 @@ function scratchOrphanedOpenRows(d: Database.Database) {
   )
 
   // Refund per mode first, then stamp each row with the post-refund balance.
+  // Wrap the write burst in a single transaction so N orphan rows produce one
+  // WAL commit at boot instead of N.
   const totals = new Map<string, number>()
   for (const r of rows) totals.set(r.mode, (totals.get(r.mode) ?? 0) + r.cost)
   const finalBalance = new Map<string, number>()
-  for (const [mode, total] of totals) {
-    const balKey = `bankroll:${mode}:balance`
-    const cur = Number((kvRead.get(balKey) as { value: string } | undefined)?.value ?? 0)
-    const next = Math.round((cur + total) * 10000) / 10000
-    kvWrite.run(balKey, String(next))
-    const dust = Number((kvRead.get(`bankroll:${mode}:dust`) as { value: string } | undefined)?.value ?? 0)
-    finalBalance.set(mode, Math.round((next + dust) * 10000) / 10000)
-  }
-
-  for (const r of rows) {
-    settleRow.run(
-      finalBalance.get(r.mode) ?? 0,
-      JSON.stringify({
-        settlement: "SCRATCH — server restarted while the position was OPEN; the in-memory position was lost and the market outcome could not be verified",
-        pnlCalc: `entry cost $${r.cost.toFixed(4)} refunded to the capital pool; realized PnL $0.0000`,
-        recovery: "boot-time orphan recovery (cost refund applied)",
-      }),
-      r.id,
-    )
-  }
+  const applyRefunds = d.transaction(() => {
+    for (const [mode, total] of totals) {
+      const balKey = `bankroll:${mode}:balance`
+      const cur = Number((kvRead.get(balKey) as { value: string } | undefined)?.value ?? 0)
+      const next = Math.round((cur + total) * 10000) / 10000
+      kvWrite.run(balKey, String(next))
+      const dust = Number((kvRead.get(`bankroll:${mode}:dust`) as { value: string } | undefined)?.value ?? 0)
+      finalBalance.set(mode, Math.round((next + dust) * 10000) / 10000)
+    }
+    for (const r of rows) {
+      settleRow.run(
+        finalBalance.get(r.mode) ?? 0,
+        JSON.stringify({
+          settlement: "SCRATCH — server restarted while the position was OPEN; the in-memory position was lost and the market outcome could not be verified",
+          pnlCalc: `entry cost $${r.cost.toFixed(4)} refunded to the capital pool; realized PnL $0.0000`,
+          recovery: "boot-time orphan recovery (cost refund applied)",
+        }),
+        r.id,
+      )
+    }
+  })
+  applyRefunds()
 }
 
 export function kvGet(key: string): string | null {
-  const row = getDb().prepare("SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined
+  const row = prep(getDb(), "SELECT value FROM kv WHERE key = ?").get(key) as { value: string } | undefined
   return row?.value ?? null
 }
 
 export function kvSet(key: string, value: string) {
-  getDb().prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
+  prep(getDb(), "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value)
 }
 
 /**
