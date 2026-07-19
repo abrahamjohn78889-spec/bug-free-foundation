@@ -44,6 +44,18 @@ const WS_HEALTHY_MS = 10_000
 const STALE_MS = 15_000 // allow extra time for VPN-routed responses
 const FETCH_TIMEOUT_MS = 10_000 // generous for VPN / high-latency connections
 
+// ------------------------------------------------------------
+// Stale-token detection & self-heal (INC-004 CLOB feed hardening)
+// ------------------------------------------------------------
+// After this many consecutive HTTP 404 responses on the current token IDs
+// the feed enters STALE mode and stops normal REST polling — the tokens
+// almost certainly refer to a resolved / delisted market. A self-heal
+// probe then runs at `RECOVERY_PROBE_INTERVAL_MS` cadence; the moment the
+// probe succeeds the feed clears its stale marker and resumes polling.
+// Both are env-tunable so operators can widen / tighten the window.
+const STALE_AFTER_404_COUNT = Math.max(1, Number(process.env.CLOB_STALE_AFTER_404_COUNT ?? 30))
+const RECOVERY_PROBE_INTERVAL_MS = Math.max(1_000, Number(process.env.CLOB_RECOVERY_PROBE_INTERVAL_MS ?? 60_000))
+
 // Confidence grading thresholds (max age of the older side of the pair).
 const CONFIDENCE_HIGH_MAX_AGE_MS = 3_000
 const CONFIDENCE_MEDIUM_MAX_AGE_MS = 10_000
@@ -150,6 +162,15 @@ export class ClobPriceFeed {
   private lastValidationFailReason = ""
   /** True while the ask book is empty (market listed but not tradeable yet). */
   private emptyBook = false
+
+  // --- stale-token / self-heal state (see STALE_AFTER_404_COUNT above) ---
+  private consecutive404s = 0
+  private stale = false
+  private staleSinceMs = 0
+  private staleTokens: { up: string | null; down: string | null } = { up: null, down: null }
+  private lastRecoveryProbeMs = 0
+  private recoveryAttempts = 0
+  private lastRecoveryOkMs = 0
 
   // --- order-book depth (REST /book each poll; WS book snapshots too) ---
   private upBook: BookDepth | null = null
@@ -357,6 +378,15 @@ export class ClobPriceFeed {
     validationFailReason: string
     emptyBook: boolean
     restCadence: "FAST" | "SLOW"
+    consecutive404s: number
+    stale: boolean
+    staleSinceMs: number
+    staleTokens: { up: string | null; down: string | null }
+    recoveryAttempts: number
+    lastRecoveryProbeMs: number
+    lastRecoveryOkMs: number
+    stale404Threshold: number
+    recoveryProbeIntervalMs: number
     ws: ReturnType<ClobWsClient["diagnostics"]>
   } {
     const now = Date.now()
@@ -380,6 +410,15 @@ export class ClobPriceFeed {
       validationFailReason: this.lastValidationFailReason,
       emptyBook: this.emptyBook,
       restCadence: this.wsHealthy() ? "SLOW" : "FAST",
+      consecutive404s: this.consecutive404s,
+      stale: this.stale,
+      staleSinceMs: this.staleSinceMs,
+      staleTokens: { ...this.staleTokens },
+      recoveryAttempts: this.recoveryAttempts,
+      lastRecoveryProbeMs: this.lastRecoveryProbeMs,
+      lastRecoveryOkMs: this.lastRecoveryOkMs,
+      stale404Threshold: STALE_AFTER_404_COUNT,
+      recoveryProbeIntervalMs: RECOVERY_PROBE_INTERVAL_MS,
       ws: this.ws.diagnostics(),
     }
   }
@@ -423,6 +462,23 @@ export class ClobPriceFeed {
     // WS quote health belongs to the OLD market's tokens: reset it so REST
     // runs at FAST cadence for the new market until its WS quotes flow.
     this.lastWsQuoteAtMs = 0
+    // Stale-token state belongs to the OLD tokens: fresh tokens deserve a
+    // fresh chance. Log the transition so operators can correlate rollovers
+    // with prior 404 storms in the Intel Feed.
+    if (this.stale) {
+      const staleForSec = ((Date.now() - this.staleSinceMs) / 1000).toFixed(0)
+      logEvent(
+        "info",
+        `[CLOB feed] token replacement — clearing stale marker (was stale for ${staleForSec}s after ${this.consecutive404s} consecutive 404s on old tokens up=${this.staleTokens.up?.slice(0, 12) ?? "-"}…, down=${this.staleTokens.down?.slice(0, 12) ?? "-"}…)`,
+      )
+    }
+    this.consecutive404s = 0
+    this.stale = false
+    this.staleSinceMs = 0
+    this.staleTokens = { up: null, down: null }
+    this.lastRecoveryProbeMs = 0
+    this.recoveryAttempts = 0
+    this.lastRecoveryOkMs = 0
   }
 
   /**
@@ -747,6 +803,22 @@ export class ClobPriceFeed {
       return
     }
 
+    // STALE-TOKEN GUARD: after `STALE_AFTER_404_COUNT` consecutive 404s the
+    // current tokens almost certainly point at a resolved / delisted market.
+    // Stop hammering CLOB (and burning quota) and let the recovery probe
+    // decide when it is safe to resume. A `force` kick (watchdog / setTokens)
+    // bypasses the throttle so operators can trigger an immediate re-check.
+    if (this.stale) {
+      const dueForProbe = now - this.lastRecoveryProbeMs >= RECOVERY_PROBE_INTERVAL_MS
+      if (!force && !dueForProbe) return
+      this.lastRecoveryProbeMs = now
+      this.recoveryAttempts++
+      logEvent(
+        "info",
+        `[CLOB feed] recovery probe #${this.recoveryAttempts} — tokens up=${upId.slice(0, 12)}…, down=${downId.slice(0, 12)}… (stale for ${((now - this.staleSinceMs) / 1000).toFixed(0)}s)`,
+      )
+    }
+
     this.lastPollAttemptMs = now
     this.totalPolls++
     const pollStartMs = Date.now()
@@ -785,6 +857,19 @@ export class ClobPriceFeed {
       this.lastRestUpdateMs = Date.now()
       this.lastApiLatencyMs = Date.now() - pollStartMs
       this.lastFailReason = ""
+      // Recovered — clear stale marker and reset 404 accounting.
+      if (this.stale) {
+        const staleForSec = ((Date.now() - this.staleSinceMs) / 1000).toFixed(0)
+        this.stale = false
+        this.staleSinceMs = 0
+        this.staleTokens = { up: null, down: null }
+        this.lastRecoveryOkMs = Date.now()
+        logEvent(
+          "info",
+          `[CLOB feed] recovered — CLOB responded 200 after ${this.recoveryAttempts} probe(s) (was stale for ${staleForSec}s)`,
+        )
+      }
+      this.consecutive404s = 0
       if (this.emptyBook) {
         this.emptyBook = false
         logEvent("info", "[CLOB feed] ask book populated — market is tradeable")
@@ -836,6 +921,30 @@ export class ClobPriceFeed {
       this.restBackoffUntilMs = Date.now() + 15_000
       this.logFailThrottled("HTTP 429 rate-limited — REST polling paused 15s (WS stream continues)")
       return
+    }
+
+    // HTTP 404 → almost always a delisted / resolved market. Track and, once
+    // the threshold is crossed, stop polling these tokens and let the
+    // recovery probe (or a fresh setTokenIds) decide when to resume.
+    const upIs404 = (upResult.askErr ?? "").includes("HTTP 404")
+    const downIs404 = (downResult.askErr ?? "").includes("HTTP 404")
+    if ((upIs404 || downIs404) && !up && !down) {
+      this.consecutive404s++
+      if (!this.stale && this.consecutive404s >= STALE_AFTER_404_COUNT) {
+        this.stale = true
+        this.staleSinceMs = Date.now()
+        this.staleTokens = { up: upId, down: downId }
+        this.lastRecoveryProbeMs = Date.now() // suppress an immediate re-probe
+        this.recoveryAttempts = 0
+        logEvent(
+          "warn",
+          `[CLOB feed] STALE tokens detected — ${this.consecutive404s} consecutive 404s on up=${upId.slice(0, 12)}…, down=${downId.slice(0, 12)}…; pausing polls, self-heal probe every ${RECOVERY_PROBE_INTERVAL_MS / 1000}s until tokens change or CLOB responds`,
+        )
+      }
+    } else {
+      // Any non-404 failure resets the 404-specific counter — we only want
+      // to escalate when the tokens themselves are the problem.
+      this.consecutive404s = 0
     }
 
     const parts: string[] = []

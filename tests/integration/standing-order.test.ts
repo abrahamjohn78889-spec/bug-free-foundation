@@ -1,4 +1,13 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+
+// These legacy tests were written against the BTC_REFERENCE majority-source
+// (window-open pre-lock). The default source is now CLOB_AT_TRIGGER (majority
+// chosen at the exact moment of trigger fire, per updated strategy spec).
+// Pin these tests to the legacy mode so they continue to validate that
+// preserved code path; the new behavior is covered in
+// tests/unit/standing-order-clob-majority.test.ts and per-slot integrations.
+beforeEach(() => { process.env.STANDING_ORDER_MAJORITY_SOURCE = "BTC_REFERENCE" })
+
 import fs from "node:fs"
 import path from "node:path"
 import { StandingOrderManager } from "@/lib/v2/engine/standing-order"

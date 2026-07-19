@@ -966,6 +966,20 @@ export class StandingOrderManager {
    */
   private computeMajority(snap: FeedSnapshot | null): { side: TradeSide | null; price: number } {
     if (!snap) return { side: null, price: 0 }
+    // STRATEGY: majority-at-trigger via CLOB implied probability.
+    // Env `STANDING_ORDER_MAJORITY_SOURCE=CLOB_AT_TRIGGER` (default) picks
+    // the side with the strictly higher CLOB best-ask (= higher implied
+    // probability) from the SAME atomic snapshot the trigger reads. This is
+    // the live-market majority the user's spec requires: direction is chosen
+    // in real time at trigger fire, not pre-locked to BTC spot vs strike. An
+    // exact tie stays null → HOLD (no guessing). Set the env to
+    // `BTC_REFERENCE` to restore the legacy pre-lock behavior.
+    const source = (process.env.STANDING_ORDER_MAJORITY_SOURCE ?? "CLOB_AT_TRIGGER").toUpperCase()
+    if (source === "CLOB_AT_TRIGGER") {
+      if (snap.up.price > snap.down.price) return { side: "UP", price: snap.up.price }
+      if (snap.down.price > snap.up.price) return { side: "DOWN", price: snap.down.price }
+      return { side: null, price: 0 }
+    }
     let side = this.btcReferenceDirection()
     if (!side && this.strike !== null && this.freshSpotPrice() !== null) {
       // BUG-A FIX (direction-lock regression): exact BTC tie versus strike
@@ -1352,7 +1366,13 @@ export class StandingOrderManager {
       //    appears — the engine never guesses a side.
       //  • The trigger lock (generation + market identity snapshot) is still
       //    taken when the trigger fires, on top of this earlier lock.
-      if (this.lockedDirection === null) {
+      // Window-open PRE-LOCK is only used when majority source is BTC_REFERENCE.
+      // In the default CLOB_AT_TRIGGER mode direction is deliberately deferred
+      // until the trigger fires so the placement uses the LIVE CLOB majority
+      // at that instant (per strategy spec: "the market direction should be
+      // determined at the exact moment the trigger price is hit, not before").
+      const majoritySourceEnv = (process.env.STANDING_ORDER_MAJORITY_SOURCE ?? "CLOB_AT_TRIGGER").toUpperCase()
+      if (majoritySourceEnv !== "CLOB_AT_TRIGGER" && this.lockedDirection === null) {
         if (majority.side === null) {
           if (this.restingOrder) this.cancelRestingOrder()
           if (!this.paused) this.status = "NO_DATA"
