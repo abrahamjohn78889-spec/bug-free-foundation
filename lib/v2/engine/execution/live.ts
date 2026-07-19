@@ -90,6 +90,20 @@ export class LiveExecutor implements Executor {
   private wallet: Wallet
   private client: ClobClient
 
+  /**
+   * PR-002 H3 — optional escalation callback fired when a partial-fill
+   * remediation cannot be completed (both the remainder cancel AND the
+   * post-cancel authoritative re-read fail). The engine wires this to
+   * Reconciler.runOnce so a fill-detection anomaly triggers immediate
+   * reconciliation instead of waiting for the next 60s interval.
+   */
+  private onFillCheckAnomaly: ((detail: string) => void) | null = null
+
+  /** Test/engine seam — install the H3 anomaly callback post-construction. */
+  setFillCheckAnomalyHandler(cb: ((detail: string) => void) | null): void {
+    this.onFillCheckAnomaly = cb
+  }
+
   constructor() {
     if (
       !env.POLY_PRIVATE_KEY ||
@@ -375,6 +389,12 @@ export class LiveExecutor implements Executor {
       // shares the account actually owns.
       let finalMatched = matched
       if (isPartialFilled) {
+        // PR-002 H3 — track both remediation steps independently. When BOTH
+        // fail we cannot trust the fill count OR the resting state; escalate
+        // to structured error + immediate reconciler nudge instead of a
+        // silent catch that hides the drift until the next 60s cycle.
+        let cancelFailedReason: string | null = null
+        let rereadFailedReason: string | null = null
         try {
           await this.client.cancelOrder({ orderID: order.exchangeOrderId })
           logEvent(
@@ -382,9 +402,10 @@ export class LiveExecutor implements Executor {
             `[LIVE_V2] Partial fill ${matched}/${order.shares} on ${order.exchangeOrderId} — remainder cancelled to prevent an orphaned resting order`,
           )
         } catch (e) {
+          cancelFailedReason = (e as Error).message
           logEvent(
             "error",
-            `[LIVE_V2] Partial fill ${matched}/${order.shares} on ${order.exchangeOrderId} but remainder cancel FAILED: ${(e as Error).message} — manual check advised`,
+            `[LIVE_V2] Partial fill ${matched}/${order.shares} on ${order.exchangeOrderId} but remainder cancel FAILED: ${cancelFailedReason} — manual check advised`,
           )
         }
         // Authoritative post-cancel read. Best-effort: on failure keep the
@@ -399,8 +420,28 @@ export class LiveExecutor implements Executor {
             )
             finalMatched = afterMatched
           }
-        } catch {
-          /* keep the pre-cancel count — reconciler cross-checks positions */
+        } catch (e) {
+          rereadFailedReason = (e as Error).message
+          // NOT silent: the reconciler nudge below runs when BOTH steps fail.
+        }
+        if (cancelFailedReason && rereadFailedReason) {
+          const detail =
+            `partial-fill anomaly on ${order.exchangeOrderId}: cancel=${cancelFailedReason}; ` +
+            `reread=${rereadFailedReason}; matched=${matched}/${order.shares}`
+          logEvent(
+            "error",
+            `[INC-004][H3] ${detail} — remainder may still be resting; forcing reconciliation`,
+          )
+          if (this.onFillCheckAnomaly) {
+            try {
+              this.onFillCheckAnomaly(detail)
+            } catch (cbErr) {
+              logEvent(
+                "warn",
+                `[INC-004][H3] anomaly handler threw: ${(cbErr as Error).message}`,
+              )
+            }
+          }
         }
       }
 
@@ -451,6 +492,33 @@ export class LiveExecutor implements Executor {
       // A definitive 404 means the order no longer exists on the book.
       if (msg.includes("404") || msg.toLowerCase().includes("not found")) return "DEAD"
       return "UNKNOWN"
+    }
+  }
+
+  /**
+   * PR-002 C1 — Stage 5 recovery lookup. Return every currently-live exchange
+   * order that carries the given client_order_id. Never throws on "not
+   * found" — an empty array is the authoritative "absent" signal the
+   * reconciler consumes to transition AMBIGUOUS → FAILED.
+   */
+  async findOrdersByClientOrderId(coid: string): Promise<Array<{ exchangeOrderId: string; raw?: unknown }>> {
+    try {
+      const rows = await this.client.getOpenOrders(undefined, true)
+      if (!Array.isArray(rows)) return []
+      const matches: Array<{ exchangeOrderId: string; raw?: unknown }> = []
+      for (const o of rows) {
+        const rowCoid = String((o as { client_order_id?: unknown }).client_order_id ?? "")
+        if (rowCoid === coid) {
+          matches.push({ exchangeOrderId: String((o as { id?: unknown }).id ?? ""), raw: o })
+        }
+      }
+      return matches
+    } catch (e) {
+      logEvent(
+        "warn",
+        `[LIVE_V2][RECOVER] findOrdersByClientOrderId(${coid}) failed: ${(e as Error).message}`,
+      )
+      throw e
     }
   }
 

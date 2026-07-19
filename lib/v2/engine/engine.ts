@@ -8,7 +8,7 @@ applyGlobalProxyPatch()
 import { startTrace, recordPoint, completeTrace } from "./latency-trace"
 import { Bankroll } from "./bankroll"
 import { clockOffsetMs, clockSynced, currentSlotEndMs, marketIdForSlot, startClockSync, tMinusMs } from "./clock"
-import { DEFAULT_STRATEGY, SLOT_MS, clampBand, env } from "./config"
+import { DEFAULT_STRATEGY, SLOT_MS, clampBand, env, isIntentFirstEnabled } from "./config"
 import { clearLedger, closeOrphanedOpenTrades, feedStats, insertOrderLog, insertTrade, kvGet, kvSet, runDbMaintenance, tradeStats } from "./db"
 import { logEvent, recentEvents } from "./events"
 import { PaperExecutor } from "./execution/paper"
@@ -143,6 +143,37 @@ export class Edge5Engine {
     // mirror (real exchange in LIVE_V2, simulated exchange in PAPER_V1).
     isLive: () => true,
     isRunning: () => this.running,
+    // PR-002 C1 — Stage 5 recovery wiring. LiveExecutor implements
+    // findOrdersByClientOrderId; other executors (paper) will return null
+    // and the reconciler skips recovery cleanly.
+    isIntentRecoveryEnabled: () => isIntentFirstEnabled(),
+    getIntentLookup: () => {
+      const ex = this.executor as unknown as {
+        findOrdersByClientOrderId?: (coid: string) => Promise<Array<{ exchangeOrderId: string; raw?: unknown }>>
+      } | null
+      if (!ex || typeof ex.findOrdersByClientOrderId !== "function") return null
+      return { findOrdersByClientOrderId: (coid: string) => ex.findOrdersByClientOrderId!(coid) }
+    },
+    // PR-002 H1 — auto-cancel untracked live orders after 3 consecutive
+    // cycles (~3 minutes at RECONCILE_MS=60s). Set INC_004_UNTRACKED_REMEDIATION=0
+    // to fall back to alert-only mode.
+    getUntrackedRemediationThreshold: () => {
+      const raw = String(process.env.INC_004_UNTRACKED_REMEDIATION ?? "3")
+      const n = Number.parseInt(raw, 10)
+      return Number.isFinite(n) ? n : 3
+    },
+    cancelExchangeOrder: async (id: string) => {
+      const ex = this.executor as unknown as { cancelOrderById?: (id: string) => Promise<void> } | null
+      if (ex && typeof ex.cancelOrderById === "function") {
+        await ex.cancelOrderById(id)
+        return
+      }
+      // Fallback: use cancelOrder with a synthetic OpenOrder wrapper.
+      const fallback = this.executor
+      if (fallback && typeof fallback.cancelOrder === "function") {
+        await fallback.cancelOrder({ exchangeOrderId: id } as unknown as OpenOrder)
+      }
+    },
   })
 
   /** Read-only end-to-end CLOB fill ↔ ledger cross-check (60s cadence).
@@ -658,7 +689,19 @@ export class Edge5Engine {
     if (this.mode === "LIVE_V2") {
       // Lazy import keeps live wallet code entirely out of the paper path.
       const { LiveExecutor } = require("./execution/live") as typeof import("./execution/live")
-      return new LiveExecutor()
+      {
+        const ex = new LiveExecutor()
+        // PR-002 H3 — nudge the reconciler when a partial-fill remediation
+        // fails on BOTH the cancel and the authoritative re-read. Waiting
+        // for the next 60s cycle would leave a possibly-still-resting
+        // remainder untracked.
+        try {
+          ex.setFillCheckAnomalyHandler?.((detail: string) => {
+            void this.reconciler.runOnce(`h3-fill-anomaly:${detail.slice(0, 60)}`)
+          })
+        } catch { /* handler wiring is best-effort */ }
+        return ex
+      }
     }
     // Full pipeline with the exchange submission intercepted. Fill decisions
     // read the LIVE CLOB best-ask; nothing can reach Polymarket.

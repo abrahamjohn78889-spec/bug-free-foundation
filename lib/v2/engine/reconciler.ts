@@ -47,6 +47,23 @@ interface Deps {
   getLocalBalanceUsd: () => number
   isLive: () => boolean
   isRunning: () => boolean
+  /**
+   * PR-002 C1 — optional Stage 5 recovery hook. When both callbacks are
+   * present the reconciler calls recoverAmbiguousIntents() after the main
+   * exchange-truth pass. Absent → recovery stays dormant (legacy behaviour).
+   */
+  getIntentLookup?: () => ExchangeIntentLookup | null
+  isIntentRecoveryEnabled?: () => boolean
+  /**
+   * PR-002 H1 — optional untracked-order auto-remediation. After
+   * getUntrackedRemediationThreshold() consecutive reconciliation cycles
+   * observe the SAME untracked exchange order id, the reconciler asks the
+   * executor to cancel it. Threshold ≤ 0 disables the remediator entirely
+   * (kill-switch: alert-only mode). Callers should default to 3 (three
+   * consecutive 60s cycles = ~3 minutes before an autonomous cancel).
+   */
+  getUntrackedRemediationThreshold?: () => number
+  cancelExchangeOrder?: (exchangeOrderId: string) => Promise<void>
 }
 
 export class Reconciler {
@@ -55,6 +72,8 @@ export class Reconciler {
   private startupTimer: ReturnType<typeof setTimeout> | null = null
   private running = false
   private last: ReconcileReport | null = null
+  /** PR-002 H1 — per-untracked-order consecutive-cycle counter. */
+  private untrackedStreak: Map<string, number> = new Map()
 
   constructor(deps: Deps) {
     this.deps = deps
@@ -143,6 +162,37 @@ export class Reconciler {
       if (ok && reason === "startup") {
         logEvent("info", `[RECONCILE] startup check clean: ${exchangeOrders.length} exchange order(s), all tracked`)
       }
+
+      // PR-002 H1 — untracked-order auto-remediation.
+      // Increment a streak counter for every currently-untracked id; clear
+      // counters for ids that are no longer untracked. When an id crosses
+      // the configured threshold, cancel it and forget its streak (the next
+      // cycle proves whether the cancel took effect).
+      await this.remediateUntrackedOrders(untracked)
+
+      // PR-002 C1 — Stage 5 AMBIGUOUS intent recovery. Wired here so every
+      // reconciler cycle drains the AMBIGUOUS queue instead of leaving it
+      // stranded forever. Guarded by feature flag AND lookup availability so
+      // legacy tests / PAPER_V1 pipelines see zero behaviour change.
+      if (
+        this.deps.isIntentRecoveryEnabled?.() === true &&
+        typeof this.deps.getIntentLookup === "function"
+      ) {
+        const lookup = this.deps.getIntentLookup()
+        if (lookup) {
+          try {
+            const rec = await recoverAmbiguousIntents(lookup)
+            if (rec.scanned > 0) {
+              logEvent(
+                "info",
+                `[INC-004][RECOVER] scanned=${rec.scanned} resting=${rec.resting} failed=${rec.failed} quarantined=${rec.quarantined} errors=${rec.errors}`,
+              )
+            }
+          } catch (e) {
+            logEvent("warn", `[INC-004][RECOVER] pass failed: ${(e as Error).message}`)
+          }
+        }
+      }
       return this.last
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -162,6 +212,45 @@ export class Reconciler {
       return this.last
     } finally {
       this.running = false
+    }
+  }
+
+  /**
+   * PR-002 H1 — Untracked exchange-order remediation.
+   *
+   * Every reconciler cycle we see a list of untracked live order ids. For
+   * each, we increment a streak counter; for ids that dropped off the
+   * untracked list we clear the counter (the drift resolved itself). When
+   * a streak crosses the configured threshold we cancel that order and
+   * clear its counter — the next cycle proves whether the cancel took.
+   *
+   * Threshold ≤ 0 (or missing cancel hook) → alert-only kill-switch mode.
+   */
+  private async remediateUntrackedOrders(untracked: string[]): Promise<void> {
+    const threshold = this.deps.getUntrackedRemediationThreshold?.() ?? 0
+    const stillUntracked = new Set(untracked)
+    for (const id of [...this.untrackedStreak.keys()]) {
+      if (!stillUntracked.has(id)) this.untrackedStreak.delete(id)
+    }
+    if (threshold <= 0 || !this.deps.cancelExchangeOrder) return
+    for (const id of untracked) {
+      const next = (this.untrackedStreak.get(id) ?? 0) + 1
+      this.untrackedStreak.set(id, next)
+      if (next >= threshold) {
+        try {
+          await this.deps.cancelExchangeOrder(id)
+          logEvent(
+            "warn",
+            `[RECONCILE][H1] untracked order ${id} persisted ${next} cycle(s) — auto-cancelled`,
+          )
+          this.untrackedStreak.delete(id)
+        } catch (e) {
+          logEvent(
+            "error",
+            `[RECONCILE][H1] untracked order ${id} persisted ${next} cycle(s) — auto-cancel FAILED: ${(e as Error).message}`,
+          )
+        }
+      }
     }
   }
 }

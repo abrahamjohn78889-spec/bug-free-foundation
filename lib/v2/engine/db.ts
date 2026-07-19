@@ -41,6 +41,20 @@ function prep(d: Database.Database, sql: string): Database.Statement {
 const writeQueue: Array<() => void> = []
 let writeProcessing = false
 
+// C5 — Write-queue health tracking. Every failed enqueued write increments
+// writeQueueErrors and stamps writeQueueLastErrorMs; writeQueueTotalOps counts
+// every processed op (ok or error). Counters are exported via
+// getWriteQueueHealth() and surfaced on the ops dashboard so a silently
+// failing ledger writer can no longer look "quiet" — it looks like a metric
+// climbing away from zero. logEvent is intentionally NOT used here to avoid
+// the db → events → db import cycle; the structured console line is enough
+// for log shippers and unit-testable via getWriteQueueHealth().
+let writeQueueTotalOps = 0
+let writeQueueErrors = 0
+let writeQueueLastError: string | null = null
+let writeQueueLastErrorMs = 0
+let writeQueueMaxDepth = 0
+
 async function processWriteQueue() {
   if (writeProcessing || writeQueue.length === 0) return
   writeProcessing = true
@@ -49,8 +63,15 @@ async function processWriteQueue() {
     if (op) {
       try {
         op()
+        writeQueueTotalOps += 1
       } catch (e) {
-        console.error("[DB] Write queue error:", e)
+        writeQueueTotalOps += 1
+        writeQueueErrors += 1
+        writeQueueLastError = (e as Error).message ?? String(e)
+        writeQueueLastErrorMs = Date.now()
+        console.error(
+          `[DB][writeQueue] error=${writeQueueLastError} totalOps=${writeQueueTotalOps} errors=${writeQueueErrors}`,
+        )
       }
     }
   }
@@ -59,8 +80,40 @@ async function processWriteQueue() {
 
 function queueWrite(op: () => void): void {
   writeQueue.push(op)
+  if (writeQueue.length > writeQueueMaxDepth) writeQueueMaxDepth = writeQueue.length
   // Use setImmediate to yield to the event loop and ensure execution never waits
   setImmediate(() => void processWriteQueue())
+}
+
+/** C5 — Health snapshot for the write queue. Read-only. */
+export interface WriteQueueHealth {
+  depth: number
+  maxDepth: number
+  totalOps: number
+  errors: number
+  lastError: string | null
+  lastErrorMs: number
+  processing: boolean
+}
+export function getWriteQueueHealth(): WriteQueueHealth {
+  return {
+    depth: writeQueue.length,
+    maxDepth: writeQueueMaxDepth,
+    totalOps: writeQueueTotalOps,
+    errors: writeQueueErrors,
+    lastError: writeQueueLastError,
+    lastErrorMs: writeQueueLastErrorMs,
+    processing: writeProcessing,
+  }
+}
+
+/** TESTING ONLY: reset write-queue counters. */
+export function resetWriteQueueHealthForTests(): void {
+  writeQueueTotalOps = 0
+  writeQueueErrors = 0
+  writeQueueLastError = null
+  writeQueueLastErrorMs = 0
+  writeQueueMaxDepth = 0
 }
 
 /**
@@ -74,8 +127,15 @@ export function flushWriteQueueSync(): void {
     if (op) {
       try {
         op()
+        writeQueueTotalOps += 1
       } catch (e) {
-        console.error("[DB] Write queue flush error:", e)
+        writeQueueTotalOps += 1
+        writeQueueErrors += 1
+        writeQueueLastError = (e as Error).message ?? String(e)
+        writeQueueLastErrorMs = Date.now()
+        console.error(
+          `[DB][writeQueue][flush] error=${writeQueueLastError} totalOps=${writeQueueTotalOps} errors=${writeQueueErrors}`,
+        )
       }
     }
   }
