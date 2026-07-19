@@ -28,6 +28,7 @@ import { allDefaultParams, defaultParamsFor, getStrategy, isStrategyId } from ".
 import { Reconciler } from "./reconciler"
 import { FillReconciler } from "./fill-reconciler"
 import { startAccountingVerifier, stopAccountingVerifier, getLastAccountingAudit } from "./accounting-verifier"
+import { enforceAuthBoot } from "./auth-boot"
 import { stopSettlementVerifier } from "./settlement-verifier"
 import { RiskManager, type RiskLimits } from "./risk"
 import { Watchdog } from "./watchdog"
@@ -318,6 +319,11 @@ export class Edge5Engine {
 
   start(): string {
     if (this.running) return "Already running"
+    // AUTH BOOT GATE (INC-004 PR-001, C3): refuse LIVE ignition when the
+    // dashboard password or bot control token is missing, or when a rogue
+    // ALLOW_UNAUTH=1 is set outside development. PAPER only warns.
+    const authFail = enforceAuthBoot(this.mode, (level, msg) => logEvent(level, msg))
+    if (authFail) return authFail
     try {
       this.executor = this.buildExecutor()
     } catch (e) {
