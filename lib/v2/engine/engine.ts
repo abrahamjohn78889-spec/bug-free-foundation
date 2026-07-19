@@ -5,13 +5,14 @@ import "./http-agent"
 // when set in .env. No-op when env vars are absent.
 import { applyGlobalProxyPatch } from "./proxy"
 applyGlobalProxyPatch()
-import { startTrace, recordPoint, completeTrace } from "./latency-trace"
+import { startTrace, recordPoint, completeTrace, nextTraceId } from "./latency-trace"
 import { Bankroll } from "./bankroll"
 import { clockOffsetMs, clockSynced, currentSlotEndMs, marketIdForSlot, startClockSync, tMinusMs } from "./clock"
 import { DEFAULT_STRATEGY, SLOT_MS, clampBand, env, isIntentFirstEnabled } from "./config"
 import { clearLedger, closeOrphanedOpenTrades, feedStats, insertOrderLog, insertTrade, kvGet, kvSet, runDbMaintenance, tradeStats } from "./db"
 import { logEvent, recentEvents } from "./events"
 import { PaperExecutor } from "./execution/paper"
+import { LiveExecutor } from "./execution/live" // PR-003 H7 — static import replaces prior dynamic require(); module has no import-time side effects and static import is deterministic + type-safe.
 import type { Executor } from "./execution/executor"
 import { MarketDiscovery, type DiscoveredMarket } from "./feeds/market-discovery"
 import { makeBtcReferenceFeed } from "./feeds/btc-reference-feed"
@@ -687,8 +688,8 @@ export class Edge5Engine {
    */
   private buildExecutor(): Executor {
     if (this.mode === "LIVE_V2") {
-      // Lazy import keeps live wallet code entirely out of the paper path.
-      const { LiveExecutor } = require("./execution/live") as typeof import("./execution/live")
+      // PR-003 H7 — LiveExecutor now statically imported at module top; keeping
+      // the constructor call gated by mode preserves the "no live wallet objects in paper" invariant.
       {
         const ex = new LiveExecutor()
         // PR-002 H3 — nudge the reconciler when a partial-fill remediation
@@ -943,7 +944,8 @@ export class Edge5Engine {
       }
       return
     }
-    const traceId = `tick-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    // PR-003 H2 — deterministic trace ID (was Date.now()+Math.random(), broke replay determinism).
+    const traceId = nextTraceId("tick")
     const trace = startTrace(traceId)
     this.lastTickStartMs = Date.now()
     this.busy = true

@@ -5,6 +5,7 @@ import { logEvent } from "./events"
 import { notify } from "./notifier"
 import { startSettlementVerifier, verifySettlements } from "./settlement-verifier"
 import { PaperExecutor } from "./execution/paper"
+import { LiveExecutor } from "./execution/live"
 import type { Executor, PlaceOrderRequest } from "./execution/executor"
 import type { MarketDiscovery, DiscoveredMarket } from "./feeds/market-discovery"
 import type { ClobPriceFeed, FeedSnapshot } from "./feeds/clob-price-feed"
@@ -912,7 +913,7 @@ export class StandingOrderManager {
    *  the order fills instantly. */
   private buildExecutor(): Executor {
     if (this.deps.getMode() === "LIVE_V2") {
-      const { LiveExecutor } = require("./execution/live") as typeof import("./execution/live")
+      // PR-003 H7 — static import (see below) replaces dynamic require().
       return new LiveExecutor()
     }
     // Paper fill decisions read THIS TICK's atomic validated snapshot via

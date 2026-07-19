@@ -12,6 +12,64 @@
  * ============================================================================
  */
 
+
+/**
+ * PR-003 H6 — server-side session invalidation via a monotonic session epoch.
+ *
+ * Before H6 the only ways to invalidate outstanding sessions were:
+ *   • change DASHBOARD_PASSWORD (also forces the operator to change how
+ *     they log in — heavy hammer, and irreversible without an env edit), or
+ *   • wait for the 7-day TTL.
+ *
+ * Neither is acceptable for a stolen-cookie scenario where the operator
+ * wants to sign out every browser tab NOW without rotating the password.
+ * The session epoch is a small integer folded into the HMAC key derivation
+ * — bumping it re-derives the key, invalidating every previously issued
+ * token instantly on the next verify() call.
+ *
+ * Storage:
+ *   • Seeded from SESSION_EPOCH env at process start.
+ *   • Mutable at runtime via bumpSessionEpoch(); persisted best-effort to
+ *     .session-epoch so a restart preserves the revocation. Missing/bad
+ *     file → falls back to env (or 0), which is safe: the operator can
+ *     always bump again.
+ */
+import * as fs from "node:fs"
+import * as path from "node:path"
+
+const EPOCH_FILE = path.join(process.cwd(), "data", ".session-epoch")
+function readEpochFile(): number | null {
+  try {
+    const raw = fs.readFileSync(EPOCH_FILE, "utf8").trim()
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null
+  } catch { return null }
+}
+function writeEpochFile(n: number): void {
+  try {
+    fs.mkdirSync(path.dirname(EPOCH_FILE), { recursive: true })
+    fs.writeFileSync(EPOCH_FILE, String(n))
+  } catch (e) {
+    // Best-effort — a read-only FS still keeps the in-memory bump active
+    // for the current process, so a signed-out attacker's cookie fails.
+    console.error(`[auth] session-epoch persist failed: ${(e as Error).message}`)
+  }
+}
+let _sessionEpoch: number = (() => {
+  const fromFile = readEpochFile()
+  if (fromFile !== null) return fromFile
+  const fromEnv = Number(process.env.SESSION_EPOCH ?? "0")
+  return Number.isFinite(fromEnv) && fromEnv >= 0 ? Math.floor(fromEnv) : 0
+})()
+export function currentSessionEpoch(): number { return _sessionEpoch }
+export function bumpSessionEpoch(): number {
+  _sessionEpoch += 1
+  writeEpochFile(_sessionEpoch)
+  return _sessionEpoch
+}
+/** TESTING ONLY. */
+export function resetSessionEpochForTests(n = 0): void { _sessionEpoch = n }
+
 const SESSION_COOKIE = "edge5_session"
 const SESSION_TTL_MS = 7 * 24 * 3_600_000 // 7 days
 
@@ -41,7 +99,8 @@ async function hmacKey(): Promise<CryptoKey> {
   // Domain-separated key derivation: the raw credentials are never the key.
   // BOTH username and password feed the key, so changing EITHER in .env
   // invalidates every outstanding session after restart.
-  const material = new TextEncoder().encode(`edge5-dashboard-session-v2|${getUsername()}|${password}`)
+  // H6: session epoch folds into the derived key so bumpSessionEpoch() invalidates every outstanding token.
+  const material = new TextEncoder().encode(`edge5-dashboard-session-v3|${_sessionEpoch}|${getUsername()}|${password}`)
   const digest = await crypto.subtle.digest("SHA-256", material)
   return crypto.subtle.importKey("raw", digest, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"])
 }

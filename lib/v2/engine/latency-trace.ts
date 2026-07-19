@@ -103,3 +103,27 @@ export function getPhaseStats(phaseName: string): { count: number; minMs: number
     avgMs: durations.reduce((a, b) => a + b, 0) / durations.length,
   }
 }
+
+/**
+ * PR-003 H2 — deterministic trace ID generator.
+ *
+ * The previous scheme was `tick-${Date.now()}-${Math.random()...}`. Both
+ * Date.now() and Math.random() are non-deterministic, so identical inputs
+ * produced different trace IDs across replays — a direct violation of
+ * trading-invariant #9 (execution must be replayable). Traces became
+ * useless for diffing recorded vs replayed pipelines.
+ *
+ * Under the new scheme every trace ID is `${prefix}-${monotonicSeq}`.
+ * The seq is a process-local, deterministic counter that only depends on
+ * how many traces have been started, not on wall-clock or RNG. Replaying
+ * the same event stream from the same starting point yields identical
+ * trace IDs, so replay-forensics can align records byte-identically.
+ */
+let __traceSeq = 0
+export function nextTraceId(prefix: string): string {
+  __traceSeq += 1
+  return `${prefix}-${__traceSeq.toString(36).padStart(6, "0")}`
+}
+export function resetTraceIdCounterForTests(): void {
+  __traceSeq = 0
+}

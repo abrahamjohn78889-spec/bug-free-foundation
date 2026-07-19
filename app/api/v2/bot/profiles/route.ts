@@ -38,6 +38,12 @@ interface ProfilesBody {
 
 export async function POST(req: Request) {
   try {
+    const { checkRateLimit, callerKeyFromRequest, RATE_LIMITS } = await import("@/lib/v2/engine/rate-limit")
+    const rl = checkRateLimit(RATE_LIMITS.profiles, callerKeyFromRequest(req))
+    if (!rl.ok) return NextResponse.json(
+      { ok: false, message: `Rate limit exceeded — retry in ${rl.retryAfterSec}s` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } },
+    )
     const { checkControlAuth } = await import("@/lib/v2/engine/api-auth")
     const auth = checkControlAuth(req)
     if (!auth.ok) return NextResponse.json({ ok: false, message: auth.message }, { status: 401 })

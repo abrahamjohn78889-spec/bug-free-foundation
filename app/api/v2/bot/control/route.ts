@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { checkControlAuth } from "@/lib/v2/engine/api-auth"
+import { checkRateLimit, callerKeyFromRequest, RATE_LIMITS } from "@/lib/v2/engine/rate-limit"
 import { getEngine } from "@/lib/v2/engine/engine"
 import { isStrategyId } from "@/lib/v2/engine/strategy-registry/registry"
 import type { PipelineMode, SloSizingMode, StrategyId, StrategyParams, TIF, TriggerMode } from "@/lib/v2/engine/types"
@@ -70,6 +71,12 @@ function finite(n: unknown): number | undefined {
 export async function POST(req: Request) {
   try {
     // Opt-in shared-secret auth (BOT_CONTROL_TOKEN). No-op when unset.
+    // PR-003 H4 — sliding-window rate limit BEFORE auth so a leaked token cannot burst-spam.
+    const rl = checkRateLimit(RATE_LIMITS.control, callerKeyFromRequest(req))
+    if (!rl.ok) return NextResponse.json(
+      { ok: false, message: `Rate limit exceeded — retry in ${rl.retryAfterSec}s` },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } },
+    )
     const auth = checkControlAuth(req)
     if (!auth.ok) {
       return NextResponse.json({ ok: false, message: auth.message }, { status: 401 })
