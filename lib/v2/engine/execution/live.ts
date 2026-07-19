@@ -9,7 +9,21 @@ import {
   Side,
   SignatureTypeV2,
 } from "@polymarket/clob-client-v2"
-import { env } from "../config"
+import { env, isIntentFirstEnabled } from "../config"
+import {
+  ClobAdapter,
+  type ClobLike,
+  type ClobRawOutcome,
+  type ClockLike,
+  SubmissionStatus,
+} from "./clob-adapter"
+import {
+  createPendingIntent,
+  markIntentSubmitted,
+  markIntentResting,
+  markIntentAmbiguous,
+  markIntentFailed,
+} from "../db"
 import { logEvent } from "../events"
 import type { LiveAccountOrder, LiveAccountTrade, OpenOrder } from "../types"
 import type { Executor, FillReport, OrderState, PlaceOrderRequest } from "./executor"
@@ -126,6 +140,19 @@ export class LiveExecutor implements Executor {
   // ---------- Executor contract ----------
 
   async placeOrder(req: PlaceOrderRequest): Promise<OpenOrder> {
+    if (isIntentFirstEnabled()) {
+      return this.placeOrderIntentFirst(req)
+    }
+    return this.placeOrderLegacy(req)
+  }
+
+  /**
+   * Legacy path — byte-for-byte identical to the pre-INC-004 placeOrder.
+   * Used when INC_004_INTENT_FIRST is OFF (the default). DO NOT modify without
+   * re-running the full historical suite; every existing regression test
+   * exercises this code path.
+   */
+  private async placeOrderLegacy(req: PlaceOrderRequest): Promise<OpenOrder> {
     const { price, size } = this.clean(req)
     const { orderType, expiration } = this.orderTiming(req)
     const postOnly = req.postOnly ?? POST_ONLY_DEFAULT
@@ -157,6 +184,124 @@ export class LiveExecutor implements Executor {
       placedAtMs: Date.now(),
       phase: req.phase,
     }
+  }
+
+  /**
+   * INC-004 Stage 4 — Intent-first path. Behaviour ONLY reached when
+   * INC_004_INTENT_FIRST=1.
+   *
+   * Ordering guarantees:
+   *   1. Persist a PENDING order_intents row BEFORE any network I/O.
+   *      A crash after this point leaves a durable record the reconciler
+   *      (Stage 5) can adopt via client_order_id lookup.
+   *   2. Mark SUBMITTED just before the adapter dispatches. The adapter
+   *      itself owns retries — every retry keeps the same coid.
+   *   3. On ACCEPTED → RESTING with the exchange order id.
+   *      On REJECTED → FAILED; re-throw the same-shape error the legacy
+   *      path throws so upstream callers see no behavioural drift.
+   *      On AMBIGUOUS / RETRIES_EXHAUSTED → AMBIGUOUS; throw so the
+   *      caller does not treat the intent as resting. Stage 5 recovers.
+   */
+  private async placeOrderIntentFirst(req: PlaceOrderRequest): Promise<OpenOrder> {
+    const { price, size } = this.clean(req)
+    const { orderType, expiration } = this.orderTiming(req)
+    const postOnly = req.postOnly ?? POST_ONLY_DEFAULT
+
+    const nowMs = Date.now()
+    // (1) Persist PENDING FIRST — before any network call.
+    const intentId = createPendingIntent({
+      clientOrderId: `pending_${randomUUID()}`,
+      mode: "LIVE_V2",
+      marketId: req.marketId,
+      tokenId: req.tokenId,
+      side: "BUY",
+      price,
+      shares: size,
+      nowMs,
+    })
+
+    // (2) Bridge the SDK to the ClobAdapter's transport contract. The adapter
+    // classifies errors, applies deterministic retries, and never throws.
+    const client = this.client
+    const clobLike: ClobLike = {
+      async submit(): Promise<ClobRawOutcome> {
+        const resp = await client.createAndPostOrder(
+          { tokenID: req.tokenId, price, side: Side.BUY, size, expiration },
+          { tickSize: TICK_SIZE },
+          orderType,
+          postOnly,
+        )
+        if (resp && resp.success === false) {
+          return { kind: "REJECTED", reason: resp.errorMsg || "unknown error" }
+        }
+        const id: string | null = resp?.orderID ?? resp?.orderId ?? null
+        if (!id) {
+          return { kind: "REJECTED", reason: "CLOB response missing order id" }
+        }
+        return { kind: "ACK", exchangeOrderId: id }
+      },
+    }
+    const clockLike: ClockLike = {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    }
+    const adapter = new ClobAdapter({
+      clob: clobLike,
+      clock: clockLike,
+      coidPrefix: "coid_int_",
+    })
+
+    // Mark SUBMITTED immediately before dispatch. Adapter retries reuse the
+    // same intent id and same coid — no additional lifecycle rows.
+    markIntentSubmitted(intentId, Date.now())
+
+    const result = await adapter.submit({
+      intentId: String(intentId),
+      marketId: req.marketId,
+      side: "BUY",
+      price,
+      size,
+    })
+
+    if (result.status === SubmissionStatus.ACCEPTED && result.exchangeOrderId) {
+      const tAck = Date.now()
+      markIntentResting(intentId, result.exchangeOrderId, tAck)
+      logEvent(
+        "info",
+        `[LIVE_V2][intent-first] ${postOnly ? "Maker" : "Taker-allowed"} intent#${intentId} RESTING: ${req.side} ${size} @ $${price.toFixed(2)} (${orderType}, exch ${result.exchangeOrderId}, attempts ${result.attempts.length})`,
+      )
+      return {
+        clientOrderId: result.clientOrderId,
+        exchangeOrderId: result.exchangeOrderId,
+        marketId: req.marketId,
+        tokenId: req.tokenId,
+        side: req.side,
+        price,
+        shares: size,
+        placedAtMs: tAck,
+        phase: req.phase,
+      }
+    }
+
+    if (result.status === SubmissionStatus.REJECTED) {
+      const reason = result.rejectReason || "unknown error"
+      markIntentFailed(intentId, reason, Date.now())
+      logEvent("warn", `[LIVE_V2][intent-first] intent#${intentId} REJECTED: ${reason}`)
+      // Preserve legacy error shape so upstream callers behave identically.
+      throw new Error(`CLOB rejected order: ${reason}`)
+    }
+
+    // AMBIGUOUS or RETRIES_EXHAUSTED — exchange state unknown. Do NOT return
+    // an OpenOrder: the caller would otherwise treat a non-existent (or
+    // shadow) order as resting. Stage 5's reconciler adopts via coid lookup.
+    const lastErr =
+      result.attempts[result.attempts.length - 1]?.errorMessage ?? result.status
+    markIntentAmbiguous(intentId, lastErr, Date.now())
+    logEvent(
+      "error",
+      `[LIVE_V2][intent-first] intent#${intentId} AMBIGUOUS after ${result.attempts.length} attempt(s): ${lastErr} — awaiting reconciler (Stage 5)`,
+    )
+    throw new Error(`CLOB submission ambiguous: ${lastErr}`)
   }
 
 

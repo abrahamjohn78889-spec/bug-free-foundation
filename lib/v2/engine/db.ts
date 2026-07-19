@@ -216,6 +216,76 @@ function getDb(): Database.Database {
     `UPDATE trades SET unrealized_pnl = NULL WHERE status = 'SETTLED' AND unrealized_pnl IS NOT NULL`,
   ).run()
 
+  // ------------------------------------------------------------------
+  // INC-004 Stage 2 — additive intent model schema.
+  //
+  // Additive only: no existing table, column, or index is modified. No
+  // UNIQUE constraints yet (Stage 6). No production reads or writes yet
+  // (Stage 4 gates behind INC_004_INTENT_FIRST, default OFF).
+  // ------------------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS order_intents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_order_id TEXT NOT NULL,
+      exchange_order_id TEXT,
+      status TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      market_id TEXT NOT NULL,
+      token_id TEXT,
+      side TEXT NOT NULL,
+      price REAL NOT NULL,
+      shares INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      submitted_at_ms INTEGER,
+      resting_at_ms INTEGER,
+      ambiguous_at_ms INTEGER,
+      failed_at_ms INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_intents_coid ON order_intents(client_order_id);
+    CREATE INDEX IF NOT EXISTS idx_order_intents_status ON order_intents(status);
+    CREATE INDEX IF NOT EXISTS idx_order_intents_exchange ON order_intents(exchange_order_id);
+
+    CREATE TABLE IF NOT EXISTS quarantined_exchange_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      exchange_order_id TEXT NOT NULL,
+      client_order_id TEXT,
+      intent_id INTEGER,
+      reason TEXT NOT NULL,
+      payload TEXT,
+      quarantined_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_quarantine_exchange ON quarantined_exchange_orders(exchange_order_id);
+    CREATE INDEX IF NOT EXISTS idx_quarantine_coid ON quarantined_exchange_orders(client_order_id);
+  `)
+
+  // ------------------------------------------------------------------
+  // INC-004 Stage 6 — UNIQUE constraint hardening.
+  //
+  // Implemented as CREATE UNIQUE INDEX (idempotent, safe on existing DBs;
+  // avoids the SQLite ALTER TABLE ADD CONSTRAINT limitation). Enforced at
+  // the DB level so duplicate intents and duplicate quarantine rows fail
+  // fast regardless of caller.
+  //
+  //   uniq_order_intents_coid              — one intent per client_order_id
+  //   uniq_order_intents_exchange          — one intent per exchange_order_id
+  //                                          (partial: WHERE exchange_order_id
+  //                                          IS NOT NULL, so many NULLs are OK
+  //                                          before submission)
+  //   uniq_quarantined_exchange_order_id   — no double-quarantine of the same
+  //                                          exchange order id
+  // ------------------------------------------------------------------
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_order_intents_coid
+      ON order_intents(client_order_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_order_intents_exchange
+      ON order_intents(exchange_order_id) WHERE exchange_order_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_quarantined_exchange_order_id
+      ON quarantined_exchange_orders(exchange_order_id);
+  `)
+
   return db
 }
 
@@ -999,4 +1069,242 @@ export function getLatencyReport(mode: PipelineMode, windowMs = 24 * 60 * 60 * 1
       fillObserved: stat(filled),
     },
   }
+}
+
+
+// ============================================================================
+// INC-004 Stage 2 — IntentStatus enum + rowcount-gated lifecycle helpers.
+//
+// These are additive. No production code path calls them yet. Stage 4 wires
+// them behind INC_004_INTENT_FIRST (default OFF). Stage 5 adds
+// AMBIGUOUS→RESTING/FAILED recovery in the reconciler.
+//
+// Rowcount gating: every transition uses UPDATE ... WHERE id = ? AND status
+// IN (allowed prior states), then asserts changes === 1. This makes the
+// transitions self-checking against races, double-completes, and reordered
+// updates.
+// ============================================================================
+export const IntentStatus = Object.freeze({
+  PENDING: "PENDING",
+  SUBMITTED: "SUBMITTED",
+  RESTING: "RESTING",
+  AMBIGUOUS: "AMBIGUOUS",
+  FAILED: "FAILED",
+} as const)
+export type IntentStatusValue = (typeof IntentStatus)[keyof typeof IntentStatus]
+
+export interface OrderIntentRow {
+  id: number
+  client_order_id: string
+  exchange_order_id: string | null
+  status: IntentStatusValue
+  mode: string
+  market_id: string
+  token_id: string | null
+  side: string
+  price: number
+  shares: number
+  attempts: number
+  last_error: string | null
+  created_at_ms: number
+  updated_at_ms: number
+  submitted_at_ms: number | null
+  resting_at_ms: number | null
+  ambiguous_at_ms: number | null
+  failed_at_ms: number | null
+}
+
+export interface CreatePendingIntentInput {
+  clientOrderId: string
+  mode: string
+  marketId: string
+  tokenId?: string | null
+  side: "BUY" | "SELL"
+  price: number
+  shares: number
+  nowMs: number
+}
+
+/** Insert a new PENDING intent. Returns the auto-generated row id. */
+export function createPendingIntent(input: CreatePendingIntentInput): number {
+  const d = getDb()
+  const info = prep(
+    d,
+    `INSERT INTO order_intents (
+       client_order_id, exchange_order_id, status, mode, market_id, token_id,
+       side, price, shares, attempts, last_error,
+       created_at_ms, updated_at_ms
+     ) VALUES (?, NULL, 'PENDING', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+  ).run(
+    input.clientOrderId,
+    input.mode,
+    input.marketId,
+    input.tokenId ?? null,
+    input.side,
+    input.price,
+    input.shares,
+    input.nowMs,
+    input.nowMs,
+  )
+  return Number(info.lastInsertRowid)
+}
+
+function transition(
+  intentId: number,
+  fromStates: readonly IntentStatusValue[],
+  setSql: string,
+  params: unknown[],
+  label: string,
+): void {
+  const d = getDb()
+  const placeholders = fromStates.map(() => "?").join(", ")
+  const info = prep(
+    d,
+    `UPDATE order_intents SET ${setSql} WHERE id = ? AND status IN (${placeholders})`,
+  ).run(...params, intentId, ...fromStates)
+  if (info.changes !== 1) {
+    const row = prep(d, `SELECT status FROM order_intents WHERE id = ?`).get(intentId) as
+      | { status: string }
+      | undefined
+    throw new Error(
+      `[INC-004] ${label}: rowcount ${info.changes} for intent ${intentId} ` +
+        `(current status=${row?.status ?? "MISSING"}, expected in [${fromStates.join(",")}])`,
+    )
+  }
+}
+
+/** PENDING → SUBMITTED. Increments attempts and stamps submitted_at_ms. */
+export function markIntentSubmitted(intentId: number, nowMs: number): void {
+  transition(
+    intentId,
+    [IntentStatus.PENDING, IntentStatus.SUBMITTED],
+    `status = 'SUBMITTED', submitted_at_ms = COALESCE(submitted_at_ms, ?), attempts = attempts + 1, updated_at_ms = ?`,
+    [nowMs, nowMs],
+    "markIntentSubmitted",
+  )
+}
+
+/** SUBMITTED → RESTING with the accepted exchange order id. */
+export function markIntentResting(
+  intentId: number,
+  exchangeOrderId: string,
+  nowMs: number,
+): void {
+  transition(
+    intentId,
+    [IntentStatus.SUBMITTED, IntentStatus.AMBIGUOUS],
+    `status = 'RESTING', exchange_order_id = ?, resting_at_ms = ?, updated_at_ms = ?, last_error = NULL`,
+    [exchangeOrderId, nowMs, nowMs],
+    "markIntentResting",
+  )
+}
+
+/** SUBMITTED → AMBIGUOUS (LOST_ACK / TIMEOUT). Recoverable by Stage 5. */
+export function markIntentAmbiguous(intentId: number, reason: string, nowMs: number): void {
+  transition(
+    intentId,
+    [IntentStatus.SUBMITTED],
+    `status = 'AMBIGUOUS', ambiguous_at_ms = ?, updated_at_ms = ?, last_error = ?`,
+    [nowMs, nowMs, reason],
+    "markIntentAmbiguous",
+  )
+}
+
+/** PENDING/SUBMITTED/AMBIGUOUS → FAILED terminal. */
+export function markIntentFailed(intentId: number, reason: string, nowMs: number): void {
+  transition(
+    intentId,
+    [IntentStatus.PENDING, IntentStatus.SUBMITTED, IntentStatus.AMBIGUOUS],
+    `status = 'FAILED', failed_at_ms = ?, updated_at_ms = ?, last_error = ?`,
+    [nowMs, nowMs, reason],
+    "markIntentFailed",
+  )
+}
+
+/** Insert a quarantine record. Returns row id. */
+export function quarantineExchangeOrder(input: {
+  exchangeOrderId: string
+  clientOrderId?: string | null
+  intentId?: number | null
+  reason: string
+  payload?: unknown
+  nowMs: number
+}): number {
+  const d = getDb()
+  const info = prep(
+    d,
+    `INSERT INTO quarantined_exchange_orders (
+       exchange_order_id, client_order_id, intent_id, reason, payload, quarantined_at_ms
+     ) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    input.exchangeOrderId,
+    input.clientOrderId ?? null,
+    input.intentId ?? null,
+    input.reason,
+    input.payload === undefined ? null : JSON.stringify(input.payload),
+    input.nowMs,
+  )
+  return Number(info.lastInsertRowid)
+}
+
+/** Read helper used by Stage 5 tests. */
+export function getIntentById(intentId: number): OrderIntentRow | null {
+  const row = prep(getDb(), `SELECT * FROM order_intents WHERE id = ?`).get(intentId) as
+    | OrderIntentRow
+    | undefined
+  return row ?? null
+}
+
+/** Read helper used by Stage 5 tests. */
+export function getIntentByClientOrderId(coid: string): OrderIntentRow | null {
+  const row = prep(getDb(), `SELECT * FROM order_intents WHERE client_order_id = ? ORDER BY id DESC LIMIT 1`).get(
+    coid,
+  ) as OrderIntentRow | undefined
+  return row ?? null
+}
+
+/** Stage 5 — enumerate AMBIGUOUS intents oldest-first for reconciliation. */
+export function listAmbiguousIntents(): OrderIntentRow[] {
+  return prep(
+    getDb(),
+    `SELECT * FROM order_intents WHERE status = 'AMBIGUOUS' ORDER BY id ASC`,
+  ).all() as OrderIntentRow[]
+}
+
+export interface QuarantineRow {
+  id: number
+  exchange_order_id: string
+  client_order_id: string | null
+  intent_id: number | null
+  reason: string
+  payload: string | null
+  quarantined_at_ms: number
+}
+
+/** Stage 5 — enumerate quarantine rows (test/dashboard read only). */
+export function listQuarantinedExchangeOrders(): QuarantineRow[] {
+  return prep(
+    getDb(),
+    `SELECT * FROM quarantined_exchange_orders ORDER BY id ASC`,
+  ).all() as QuarantineRow[]
+}
+
+/**
+ * Stage 6 — probe that the UNIQUE integrity constraints are present.
+ *
+ * Returns true only when every required unique index exists on the live
+ * schema. Used by the INC-004 contract-lock and by operators verifying a
+ * migration landed. Safe to call at any time (read-only, no side effects).
+ */
+export function hasIntentUniqueConstraints(): boolean {
+  const d = getDb()
+  const rows = prep(
+    d,
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?)`,
+  ).all(
+    "uniq_order_intents_coid",
+    "uniq_order_intents_exchange",
+    "uniq_quarantined_exchange_order_id",
+  ) as Array<{ name: string }>
+  return rows.length === 3
 }

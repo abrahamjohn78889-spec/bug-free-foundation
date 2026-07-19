@@ -165,3 +165,168 @@ export class Reconciler {
     }
   }
 }
+
+// ============================================================================
+// INC-004 Stage 5 — AMBIGUOUS intent recovery + orphan / duplicate quarantine.
+//
+// Recovery pass, invoked out-of-band from the periodic reconciler loop:
+//   • Enumerates every AMBIGUOUS intent (oldest first).
+//   • Looks up live exchange orders sharing that intent's client_order_id.
+//   • 0 matches  → intent transitions AMBIGUOUS → FAILED
+//                  reason "reconciled_absent".
+//   • 1 match    → intent transitions AMBIGUOUS → RESTING with that
+//                  exchange_order_id.
+//   • >1 matches → deterministic promotion (lowest exchange id) becomes
+//                  the canonical order; every other exchange id is written
+//                  to quarantined_exchange_orders with reason
+//                  "duplicate_for_intent" and the intent moves to RESTING.
+//
+// The pass is read-mostly against the exchange (one lookup call per
+// ambiguous intent). It does NOT cancel, replace, or place orders — that
+// stays out-of-scope until an operator or Stage 6+ policy decides.
+//
+// Design constraints:
+//   • Never mutates strategy, settlement, or Stage 4 execution flow.
+//   • Never creates new intents.
+//   • Never introduces UNIQUE constraints (Stage 6).
+//   • Every state change goes through the rowcount-gated Stage 2 helpers so
+//     concurrent recovery attempts cannot double-transition an intent.
+// ============================================================================
+
+import {
+  IntentStatus,
+  listAmbiguousIntents,
+  markIntentFailed,
+  markIntentResting,
+  quarantineExchangeOrder,
+} from "./db"
+
+export interface ExchangeOrderMatch {
+  exchangeOrderId: string
+  raw?: unknown
+}
+
+export interface ExchangeIntentLookup {
+  /**
+   * Return every live exchange order that carries the given
+   * client_order_id. Must return [] (never throw) when the exchange
+   * confirms the order is not present.
+   */
+  findOrdersByClientOrderId(coid: string): Promise<ExchangeOrderMatch[]>
+}
+
+export interface AmbiguousRecoveryResult {
+  scanned: number
+  resting: number
+  failed: number
+  quarantined: number
+  errors: number
+  details: Array<{
+    intentId: number
+    clientOrderId: string
+    outcome: "resting" | "failed" | "error"
+    exchangeOrderId?: string
+    quarantinedExchangeOrderIds?: string[]
+    error?: string
+  }>
+}
+
+/**
+ * Recover every AMBIGUOUS intent by asking the exchange whether the
+ * order landed. See file-level block comment for the full contract.
+ */
+export async function recoverAmbiguousIntents(
+  lookup: ExchangeIntentLookup,
+  nowMs: number = Date.now(),
+): Promise<AmbiguousRecoveryResult> {
+  const rows = listAmbiguousIntents()
+  const result: AmbiguousRecoveryResult = {
+    scanned: rows.length,
+    resting: 0,
+    failed: 0,
+    quarantined: 0,
+    errors: 0,
+    details: [],
+  }
+
+  for (const intent of rows) {
+    // Defensive: status may have changed between listing and processing.
+    if (intent.status !== IntentStatus.AMBIGUOUS) continue
+
+    try {
+      const matches = await lookup.findOrdersByClientOrderId(intent.client_order_id)
+
+      if (matches.length === 0) {
+        markIntentFailed(intent.id, "reconciled_absent", nowMs)
+        result.failed += 1
+        result.details.push({
+          intentId: intent.id,
+          clientOrderId: intent.client_order_id,
+          outcome: "failed",
+        })
+        logEvent(
+          "warn",
+          `[INC-004][RECOVER] intent ${intent.id} coid=${intent.client_order_id} — exchange reports no matching order; marking FAILED`,
+        )
+        continue
+      }
+
+      // Deterministic canonical pick — lowest exchange id lexicographically.
+      const sorted = [...matches].sort((a, b) =>
+        a.exchangeOrderId < b.exchangeOrderId ? -1 : a.exchangeOrderId > b.exchangeOrderId ? 1 : 0,
+      )
+      const [canonical, ...duplicates] = sorted
+
+      const quarantinedIds: string[] = []
+      for (const dup of duplicates) {
+        quarantineExchangeOrder({
+          exchangeOrderId: dup.exchangeOrderId,
+          clientOrderId: intent.client_order_id,
+          intentId: intent.id,
+          reason: "duplicate_for_intent",
+          payload: dup.raw,
+          nowMs,
+        })
+        quarantinedIds.push(dup.exchangeOrderId)
+        result.quarantined += 1
+      }
+
+      markIntentResting(intent.id, canonical.exchangeOrderId, nowMs)
+      result.resting += 1
+      result.details.push({
+        intentId: intent.id,
+        clientOrderId: intent.client_order_id,
+        outcome: "resting",
+        exchangeOrderId: canonical.exchangeOrderId,
+        quarantinedExchangeOrderIds: quarantinedIds.length > 0 ? quarantinedIds : undefined,
+      })
+
+      if (quarantinedIds.length > 0) {
+        logEvent(
+          "error",
+          `[INC-004][RECOVER] intent ${intent.id} coid=${intent.client_order_id} — ${matches.length} exchange orders; promoted ${canonical.exchangeOrderId}, quarantined ${quarantinedIds.length} duplicate(s): ${quarantinedIds.join(", ")}`,
+        )
+      } else {
+        logEvent(
+          "info",
+          `[INC-004][RECOVER] intent ${intent.id} coid=${intent.client_order_id} — exchange confirms ${canonical.exchangeOrderId}; promoted to RESTING`,
+        )
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      result.errors += 1
+      result.details.push({
+        intentId: intent.id,
+        clientOrderId: intent.client_order_id,
+        outcome: "error",
+        error: msg,
+      })
+      logEvent(
+        "warn",
+        `[INC-004][RECOVER] intent ${intent.id} coid=${intent.client_order_id} — recovery failed: ${msg}`,
+      )
+    }
+  }
+
+  return result
+}

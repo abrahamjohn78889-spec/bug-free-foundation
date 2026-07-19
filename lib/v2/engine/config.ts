@@ -107,3 +107,29 @@ export function clampBand(min: number, max: number) {
   const hi = Math.min(Math.max(max, lo), 0.99)
   return { min: Math.round(lo * 100) / 100, max: Math.round(hi * 100) / 100 }
 }
+
+// ============================================================================
+// INC-004 Stage 4 — Intent-first execution feature flag.
+//
+// Default OFF: LiveExecutor.placeOrder keeps its legacy behaviour exactly.
+// Set env INC_004_INTENT_FIRST=1 to enable:
+//   - persist a PENDING order_intents row BEFORE any network submission
+//   - submit via ClobAdapter (stable coid, deterministic retries, error
+//     taxonomy, never throws)
+//   - transition PENDING → SUBMITTED → RESTING on ACK,
+//     SUBMITTED → AMBIGUOUS on lost-ack / timeout / network,
+//     PENDING → FAILED on permanent reject
+//
+// Stage 5 will add AMBIGUOUS recovery. Stage 6 adds UNIQUE constraints.
+// The flag is read at LiveExecutor call time so tests / dashboards can toggle
+// it without recycling the process.
+// ============================================================================
+export const INC_004_INTENT_FIRST: boolean =
+  String(process.env.INC_004_INTENT_FIRST ?? "0").toLowerCase() === "1" ||
+  String(process.env.INC_004_INTENT_FIRST ?? "").toLowerCase() === "true"
+
+/** Runtime read so a test/dashboard toggle of process.env is honored. */
+export function isIntentFirstEnabled(): boolean {
+  const raw = String(process.env.INC_004_INTENT_FIRST ?? "").toLowerCase()
+  return raw === "1" || raw === "true"
+}
